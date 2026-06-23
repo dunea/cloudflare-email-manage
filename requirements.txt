@@ -10,10 +10,11 @@ alembic>=1.14.0
 # 配置与校验
 pydantic>=2.9.0
 pydantic-settings>=2.6.0
+email-validator>=2.0.0  # pydantic EmailStr 依赖
 
 # 认证与安全
 python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
+bcrypt>=4.1.0  # 直接使用 bcrypt（passlib 1.7.4 与 bcrypt 5.x/Python 3.13+ 不兼容）
 cryptography>=43.0.0
 
 # HTTP 客户端（调用 CF API）
