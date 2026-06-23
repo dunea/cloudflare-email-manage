@@ -1,0 +1,6 @@
+Alembic 异步迁移环境（generic async template）。
+
+常用命令：
+  alembic revision --autogenerate -m "描述"   # 生成迁移
+  alembic upgrade head                          # 应用迁移
+  alembic downgrade -1                          # 回退一步
