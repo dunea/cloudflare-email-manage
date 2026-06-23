@@ -73,7 +73,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         return _error_response(
             code=1422,
             message=f"请求参数校验失败: {exc.errors()}",
-            http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
 
     @app.exception_handler(Exception)
