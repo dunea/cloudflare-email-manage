@@ -1,9 +1,122 @@
-"""CF账号 路由。
+"""CF账号 路由：绑定、查询、更新、软删除、域名同步。
 
 路由层只做参数接收、权限校验、调用 service 并返回统一响应。
-具体接口将在后续阶段实现。
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query, status
+
+from app.dependencies import CurrentUser, SessionDep
+from app.schemas.cf_account import CFAccountCreate, CFAccountRead, CFAccountUpdate
+from app.schemas.common import ApiResponse, PageData
+from app.schemas.domain import DomainRead, DomainSyncResult
+from app.services import cf_account_service, domain_service
 
 router = APIRouter(prefix="/cf-accounts", tags=["CF账号"])
+
+
+@router.post(
+    "",
+    response_model=ApiResponse[CFAccountRead],
+    status_code=status.HTTP_201_CREATED,
+    summary="绑定 CF 账号",
+)
+async def bind_cf_account(
+    data: CFAccountCreate, current_user: CurrentUser, session: SessionDep
+) -> ApiResponse[CFAccountRead]:
+    """校验 API Token 后加密绑定 CF 账号。"""
+    cf_account = await cf_account_service.bind_cf_account(session, current_user, data)
+    return ApiResponse(data=CFAccountRead.model_validate(cf_account))
+
+
+@router.get(
+    "",
+    response_model=ApiResponse[PageData[CFAccountRead]],
+    summary="CF 账号列表",
+)
+async def list_cf_accounts(
+    current_user: CurrentUser,
+    session: SessionDep,
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+) -> ApiResponse[PageData[CFAccountRead]]:
+    """分页查询当前用户绑定的 CF 账号。"""
+    accounts, total = await cf_account_service.list_cf_accounts(
+        session, current_user, page, size
+    )
+    page_data = PageData[CFAccountRead](
+        total=total,
+        page=page,
+        size=size,
+        items=[CFAccountRead.model_validate(a) for a in accounts],
+    )
+    return ApiResponse(data=page_data)
+
+
+@router.get(
+    "/{account_id}",
+    response_model=ApiResponse[CFAccountRead],
+    summary="获取 CF 账号",
+)
+async def get_cf_account(
+    account_id: int, current_user: CurrentUser, session: SessionDep
+) -> ApiResponse[CFAccountRead]:
+    """获取指定 CF 账号详情。"""
+    cf_account = await cf_account_service.get_cf_account_or_404(
+        session, account_id, current_user
+    )
+    return ApiResponse(data=CFAccountRead.model_validate(cf_account))
+
+
+@router.patch(
+    "/{account_id}",
+    response_model=ApiResponse[CFAccountRead],
+    summary="更新 CF 账号",
+)
+async def update_cf_account(
+    account_id: int,
+    data: CFAccountUpdate,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> ApiResponse[CFAccountRead]:
+    """更新 CF 账号信息（可更换 Token）。"""
+    cf_account = await cf_account_service.get_cf_account_or_404(
+        session, account_id, current_user
+    )
+    updated = await cf_account_service.update_cf_account(session, cf_account, data)
+    return ApiResponse(data=CFAccountRead.model_validate(updated))
+
+
+@router.delete(
+    "/{account_id}",
+    response_model=ApiResponse[None],
+    summary="解绑 CF 账号",
+)
+async def delete_cf_account(
+    account_id: int, current_user: CurrentUser, session: SessionDep
+) -> ApiResponse[None]:
+    """软删除（解绑）CF 账号。"""
+    cf_account = await cf_account_service.get_cf_account_or_404(
+        session, account_id, current_user
+    )
+    await cf_account_service.delete_cf_account(session, cf_account)
+    return ApiResponse(message="已解绑")
+
+
+@router.post(
+    "/{account_id}/sync",
+    response_model=ApiResponse[DomainSyncResult],
+    summary="同步域名",
+)
+async def sync_domains(
+    account_id: int, current_user: CurrentUser, session: SessionDep
+) -> ApiResponse[DomainSyncResult]:
+    """从 Cloudflare 同步该账号下的域名到本地。"""
+    cf_account = await cf_account_service.get_cf_account_or_404(
+        session, account_id, current_user
+    )
+    domains = await domain_service.sync_domains(session, cf_account, current_user)
+    result = DomainSyncResult(
+        synced=len(domains),
+        domains=[DomainRead.model_validate(d) for d in domains],
+    )
+    return ApiResponse(data=result)
