@@ -15,12 +15,12 @@
       },
     };
   </script>
-  <!-- Alpine.js：轻量交互（侧栏开关、下拉菜单、复制等） -->
+  <!-- Alpine.js：轻量交互（导航折叠、下拉菜单、复制等） -->
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
   <script defer src="/static/js/app.js"></script>
   <style>[x-cloak]{display:none !important;}</style>
 </head>
-<body class="min-h-screen bg-slate-50 text-slate-800 antialiased">
+<body class="flex min-h-screen flex-col bg-slate-50 text-slate-800 antialiased">
   {% set nav_items = [
     {"key": "dashboard", "label": "仪表盘", "href": "/dashboard", "icon": "🏠"},
     {"key": "cf_accounts", "label": "CF 账号", "href": "/cf-accounts", "icon": "☁️"},
@@ -32,46 +32,35 @@
     {"key": "api_keys", "label": "API Key", "href": "/api-keys", "icon": "🔑"},
   ] %}
 
-  <div class="min-h-screen {% if current_user %}lg:flex{% endif %}"
-       {% if current_user %}x-data="{ sidebarOpen: false }"{% endif %}>
-
-    {% if current_user %}
-    <!-- 移动端遮罩 -->
-    <div x-show="sidebarOpen" x-cloak @click="sidebarOpen = false"
-         class="fixed inset-0 z-20 bg-black/40 lg:hidden"></div>
-
-    <!-- 侧栏导航 -->
-    <aside :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'"
-           class="fixed inset-y-0 left-0 z-30 w-64 transform overflow-y-auto bg-slate-900 text-slate-200 transition-transform duration-200 lg:static lg:translate-x-0">
-      <div class="flex h-16 items-center gap-2 border-b border-slate-800 px-5">
+  {% if current_user %}
+  <!-- 顶部导航 -->
+  <header x-data="{ mobileNav: false }" @click.outside="mobileNav = false"
+          class="sticky top-0 z-30 border-b border-slate-200 bg-white">
+    <div class="mx-auto flex h-16 w-full max-w-7xl items-center gap-2 px-4 lg:gap-4 lg:px-8">
+      <!-- 品牌 -->
+      <a href="/dashboard" class="flex shrink-0 items-center gap-2">
         <span class="text-2xl">📨</span>
-        <span class="text-lg font-semibold text-white">{{ app_name }}</span>
-      </div>
-      <nav class="space-y-1 px-3 py-4">
+        <span class="hidden text-lg font-semibold text-slate-900 sm:block">{{ app_name }}</span>
+      </a>
+
+      <!-- 桌面横向导航 -->
+      <nav class="hidden flex-1 items-center gap-1 lg:flex">
         {% for item in nav_items %}
         <a href="{{ item.href }}"
-           class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition {{ 'bg-brand text-white' if active == item.key else 'text-slate-300 hover:bg-slate-800 hover:text-white' }}">
+           class="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm font-medium transition {{ 'bg-brand text-white' if active == item.key else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900' }}">
           <span>{{ item.icon }}</span><span>{{ item.label }}</span>
         </a>
         {% endfor %}
         {% if current_user.role == "admin" %}
-        <p class="px-3 pt-5 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-500">管理员</p>
         <a href="/admin/users"
-           class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition {{ 'bg-brand text-white' if active == 'admin_users' else 'text-slate-300 hover:bg-slate-800 hover:text-white' }}">
+           class="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm font-medium transition {{ 'bg-brand text-white' if active == 'admin_users' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900' }}">
           <span>👥</span><span>用户管理</span>
         </a>
         {% endif %}
       </nav>
-    </aside>
-    {% endif %}
 
-    <!-- 主区域 -->
-    <div class="flex min-h-screen flex-1 flex-col">
-      {% if current_user %}
-      <header class="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 lg:px-6">
-        <button @click="sidebarOpen = true"
-                class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 lg:hidden">☰</button>
-        <div class="flex-1"></div>
+      <!-- 右侧：用户菜单 + 移动端汉堡 -->
+      <div class="flex flex-1 items-center justify-end gap-1 lg:flex-none">
         <div x-data="{ menu: false }" class="relative">
           <button @click="menu = !menu"
                   class="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-slate-100">
@@ -89,22 +78,55 @@
             </form>
           </div>
         </div>
-      </header>
-      {% endif %}
-
-      <main class="flex-1 {% if current_user %}px-4 py-6 lg:px-8{% else %}flex flex-col items-center justify-center px-4 py-10{% endif %}">
-        {% if not current_user %}
-        <div class="mb-6 flex items-center gap-2">
-          <span class="text-3xl">📨</span>
-          <span class="text-xl font-semibold text-slate-900">{{ app_name }}</span>
-        </div>
-        {% endif %}
-        <div class="{% if not current_user %}w-full max-w-md{% else %}mx-auto w-full max-w-6xl{% endif %}">
-          {% include "components/flash.html" %}
-          {% block content %}{% endblock %}
-        </div>
-      </main>
+        <button @click="mobileNav = !mobileNav" aria-label="切换导航"
+                class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 lg:hidden">☰</button>
+      </div>
     </div>
-  </div>
+
+    <!-- 移动端折叠导航 -->
+    <nav x-show="mobileNav" x-cloak @click="mobileNav = false"
+         class="space-y-1 border-t border-slate-200 bg-white px-3 py-2 lg:hidden">
+      {% for item in nav_items %}
+      <a href="{{ item.href }}"
+         class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium {{ 'bg-brand text-white' if active == item.key else 'text-slate-700 hover:bg-slate-100' }}">
+        <span>{{ item.icon }}</span><span>{{ item.label }}</span>
+      </a>
+      {% endfor %}
+      {% if current_user.role == "admin" %}
+      <a href="/admin/users"
+         class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium {{ 'bg-brand text-white' if active == 'admin_users' else 'text-slate-700 hover:bg-slate-100' }}">
+        <span>👥</span><span>用户管理</span>
+      </a>
+      {% endif %}
+    </nav>
+  </header>
+  {% endif %}
+
+  <!-- 主区域 -->
+  <main class="flex-1 {% if current_user %}px-4 py-6 lg:px-8{% else %}flex flex-col items-center justify-center px-4 py-10{% endif %}">
+    {% if not current_user %}
+    <div class="mb-6 flex items-center gap-2">
+      <span class="text-3xl">📨</span>
+      <span class="text-xl font-semibold text-slate-900">{{ app_name }}</span>
+    </div>
+    {% endif %}
+    <div class="{% if not current_user %}w-full max-w-md{% else %}mx-auto w-full max-w-6xl{% endif %}">
+      {% include "components/flash.html" %}
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+
+  <!-- 页脚 -->
+  <footer class="border-t border-slate-200 bg-white">
+    <div class="mx-auto w-full max-w-7xl px-4 py-6 lg:px-8">
+      <p class="text-center text-sm text-slate-500">
+        作者 Telegram：<a href="https://t.me/nuoyea" target="_blank" rel="noopener noreferrer"
+                          class="font-medium text-brand hover:underline">@nuoyea</a>
+        <span class="px-2 text-slate-300">·</span>
+        开源地址：<a href="https://github.com/dunea/cloudflare-email-manage" target="_blank" rel="noopener noreferrer"
+                     class="font-medium text-brand hover:underline">GitHub</a>
+      </p>
+    </div>
+  </footer>
 </body>
 </html>
