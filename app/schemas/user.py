@@ -10,7 +10,7 @@ class UserCreate(BaseModel):
 
     username: str = Field(min_length=3, max_length=64)
     email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=6, max_length=128)
 
 
 class UserLogin(BaseModel):
@@ -24,7 +24,7 @@ class UserUpdate(BaseModel):
     """更新当前用户信息请求体，字段均可选。"""
 
     email: EmailStr | None = None
-    password: str | None = Field(default=None, min_length=8, max_length=128)
+    password: str | None = Field(default=None, min_length=6, max_length=128)
 
 
 class UserRead(BaseModel):
