@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% from "components/macros.html" import badge %}
+{% block title %}{{ account.name }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="mb-6 flex flex-wrap items-center justify-between gap-3">
+  <div>
+    <a href="/cf-accounts" class="text-sm text-slate-500 hover:text-brand">← 返回列表</a>
+    <h1 class="mt-2 text-2xl font-semibold text-slate-900">{{ account.name }}</h1>
+  </div>
+  <div class="flex gap-2">
+    <form method="post" action="/cf-accounts/{{ account.id }}/sync">
+      <button type="submit"
+              class="rounded-lg border border-brand px-4 py-2 text-sm font-semibold text-brand hover:bg-brand/5">同步域名</button>
+    </form>
+    <form method="post" action="/cf-accounts/{{ account.id }}/delete"
+          onsubmit="return confirm('确定解绑该 CF 账号？此操作不可撤销。');">
+      <button type="submit"
+              class="rounded-lg border border-red-300 px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-50">解绑</button>
+    </form>
+  </div>
+</div>
+
+<div class="grid gap-6 lg:grid-cols-2">
+  <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+    <h3 class="mb-4 font-semibold text-slate-800">账号信息</h3>
+    <dl class="space-y-3 text-sm">
+      <div class="flex justify-between gap-4">
+        <dt class="text-slate-500">Account ID</dt>
+        <dd class="font-mono text-slate-700">{{ account.account_id }}</dd>
+      </div>
+      <div class="flex justify-between gap-4">
+        <dt class="text-slate-500">权限范围</dt>
+        <dd class="text-slate-700">{{ "全部域名" if account.permission_type == "all" else "指定域名" }}</dd>
+      </div>
+      {% if account.allowed_zone_ids %}
+      <div class="flex justify-between gap-4">
+        <dt class="text-slate-500">允许的 Zone</dt>
+        <dd class="text-right font-mono text-xs text-slate-700">{{ account.allowed_zone_ids | join(", ") }}</dd>
+      </div>
+      {% endif %}
+      <div class="flex justify-between gap-4">
+        <dt class="text-slate-500">状态</dt>
+        <dd>{% if account.is_active %}{{ badge("启用", "green") }}{% else %}{{ badge("停用", "slate") }}{% endif %}</dd>
+      </div>
+      <div class="flex justify-between gap-4">
+        <dt class="text-slate-500">创建时间</dt>
+        <dd class="text-slate-700">{{ account.created_at | dt }}</dd>
+      </div>
+    </dl>
+  </div>
+
+  <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+    <h3 class="mb-4 font-semibold text-slate-800">编辑</h3>
+    <form method="post" action="/cf-accounts/{{ account.id }}/edit" class="space-y-4"
+          x-data="{ ptype: '{{ account.permission_type }}' }">
+      <div>
+        <label class="mb-1 block text-sm font-medium text-slate-700">名称</label>
+        <input name="name" value="{{ account.name }}" required maxlength="128"
+               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+      </div>
+      <div>
+        <label class="mb-1 block text-sm font-medium text-slate-700">权限范围</label>
+        <div class="flex gap-4 text-sm">
+          <label class="flex items-center gap-2">
+            <input type="radio" name="permission_type" value="all" x-model="ptype" /> 全部域名
+          </label>
+          <label class="flex items-center gap-2">
+            <input type="radio" name="permission_type" value="specific" x-model="ptype" /> 指定域名
+          </label>
+        </div>
+      </div>
+      <div x-show="ptype === 'specific'" x-cloak>
+        <label class="mb-1 block text-sm font-medium text-slate-700">允许的 Zone ID</label>
+        <textarea name="allowed_zone_ids" rows="2" placeholder="多个用逗号或换行分隔"
+                  class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">{{ account.allowed_zone_ids | join(", ") if account.allowed_zone_ids else "" }}</textarea>
+      </div>
+      <div>
+        <label class="mb-1 block text-sm font-medium text-slate-700">更换 API Token（留空则不变）</label>
+        <input name="api_token" type="password"
+               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+      </div>
+      <label class="flex items-center gap-2 text-sm text-slate-700">
+        <input type="checkbox" name="is_active" {% if account.is_active %}checked{% endif %} /> 启用该账号
+      </label>
+      <button type="submit"
+              class="rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark">保存修改</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

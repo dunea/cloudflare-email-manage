@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% from "components/macros.html" import badge, empty_state, pagination %}
+{% block title %}域名 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-semibold text-slate-900">域名</h1>
+  <p class="mt-1 text-sm text-slate-500">来自已绑定 CF 账号同步的域名（在 CF 账号详情页点击「同步域名」）</p>
+</div>
+
+{% if domains %}
+<div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+  <table class="w-full text-sm">
+    <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
+      <tr>
+        <th class="px-4 py-3">域名</th>
+        <th class="px-4 py-3">Zone ID</th>
+        <th class="px-4 py-3">归属</th>
+        <th class="px-4 py-3">状态</th>
+        <th class="px-4 py-3">创建时间</th>
+        <th class="px-4 py-3 text-right">操作</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100">
+      {% for d in domains %}
+      <tr class="hover:bg-slate-50">
+        <td class="px-4 py-3">
+          <a href="/domains/{{ d.id }}" class="font-medium text-slate-700 hover:text-brand">{{ d.domain_name }}</a>
+        </td>
+        <td class="px-4 py-3 font-mono text-xs text-slate-500">{{ d.zone_id }}</td>
+        <td class="px-4 py-3">
+          {% if d.owner_type == "platform" %}{{ badge("平台域名", "indigo") }}{% else %}{{ badge("用户域名", "slate") }}{% endif %}
+        </td>
+        <td class="px-4 py-3 text-slate-600">{{ d.status }}</td>
+        <td class="px-4 py-3 text-slate-400">{{ d.created_at | dt }}</td>
+        <td class="px-4 py-3 text-right">
+          <a href="/domains/{{ d.id }}" class="text-sm font-medium text-brand hover:underline">详情</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{{ pagination(page, size, total, "/domains") }}
+{% else %}
+{{ empty_state("还没有域名。请先在「CF 账号」中绑定账号并点击「同步域名」。") }}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,210 @@
+"""前端域名与邮箱地址页面测试：列表 / 详情 / 分配 / 邮箱 CRUD。
+
+域名由测试直接写库（绕过 CF 同步），不发真实网络请求。
+"""
+
+from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import CFAccount, Domain, EmailAddress, User
+from app.services.crypto import encrypt_token
+
+
+async def _web_login(
+    client: AsyncClient,
+    username: str = "alice",
+    email: str = "alice@example.com",
+    password: str = "password123",
+) -> None:
+    await client.post(
+        "/register",
+        data={"username": username, "email": email, "password": password},
+    )
+    await client.post("/login", data={"username": username, "password": password})
+
+
+async def _get_user(db_session: AsyncSession, username: str = "alice") -> User:
+    return (
+        await db_session.execute(select(User).where(User.username == username))
+    ).scalar_one()
+
+
+async def _seed_domain(
+    db_session: AsyncSession,
+    user_id: int,
+    *,
+    domain_name: str = "example.com",
+    owner_type: str = "user",
+    zone_id: str = "z1",
+) -> Domain:
+    """直接写库构造一个 CF 账号 + 域名。"""
+    cf = CFAccount(
+        user_id=user_id,
+        name="acc",
+        encrypted_api_token=encrypt_token("t"),
+        account_id="acc-1",
+        permission_type="all",
+    )
+    db_session.add(cf)
+    await db_session.commit()
+    await db_session.refresh(cf)
+    domain = Domain(
+        cf_account_id=cf.id,
+        zone_id=zone_id,
+        domain_name=domain_name,
+        owner_type=owner_type,
+        status="active",
+    )
+    db_session.add(domain)
+    await db_session.commit()
+    await db_session.refresh(domain)
+    return domain
+
+
+# ---- 域名 ----
+
+
+async def test_domains_list_empty(client: AsyncClient) -> None:
+    await _web_login(client)
+    resp = await client.get("/domains")
+    assert resp.status_code == 200
+    assert "还没有域名" in resp.text
+
+
+async def test_domains_list_shows_domain(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _web_login(client)
+    user = await _get_user(db_session)
+    await _seed_domain(db_session, user.id, domain_name="mine.com")
+    resp = await client.get("/domains")
+    assert resp.status_code == 200
+    assert "mine.com" in resp.text
+
+
+async def test_domain_detail(client: AsyncClient, db_session: AsyncSession) -> None:
+    await _web_login(client)
+    user = await _get_user(db_session)
+    domain = await _seed_domain(db_session, user.id, domain_name="mine.com")
+    resp = await client.get(f"/domains/{domain.id}")
+    assert resp.status_code == 200
+    assert "mine.com" in resp.text
+
+
+async def test_domain_detail_not_found(client: AsyncClient) -> None:
+    await _web_login(client)
+    resp = await client.get("/domains/99999")
+    assert resp.status_code == 404
+
+
+async def test_domain_assignment_flow(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """管理员将平台域名分配给用户，再取消分配。"""
+    await _web_login(client)
+    alice = await _get_user(db_session)
+    alice.role = "admin"
+    await db_session.commit()
+
+    await client.post(
+        "/register",
+        data={"username": "bob", "email": "bob@example.com", "password": "password123"},
+    )
+    bob = await _get_user(db_session, "bob")
+    domain = await _seed_domain(
+        db_session, alice.id, domain_name="platform.com", owner_type="platform"
+    )
+
+    resp = await client.post(
+        f"/domains/{domain.id}/assignments",
+        data={"user_id": str(bob.id)},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    detail = await client.get(f"/domains/{domain.id}")
+    assert "bob" in detail.text
+    assert "已分配域名给该用户" in detail.text
+
+    resp = await client.post(
+        f"/domains/{domain.id}/assignments/{bob.id}/delete", follow_redirects=False
+    )
+    assert resp.status_code == 303
+    detail = await client.get(f"/domains/{domain.id}")
+    assert "已取消分配" in detail.text
+
+
+async def test_domain_assignment_requires_admin(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """普通用户访问分配端点被重定向（非管理员）。"""
+    await _web_login(client)
+    user = await _get_user(db_session)
+    domain = await _seed_domain(
+        db_session, user.id, domain_name="platform.com", owner_type="platform"
+    )
+    resp = await client.post(
+        f"/domains/{domain.id}/assignments",
+        data={"user_id": "1"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/dashboard"
+
+
+# ---- 邮箱地址 ----
+
+
+async def test_email_address_crud(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """创建 → 列表可见 → 停用 → 删除。"""
+    await _web_login(client)
+    user = await _get_user(db_session)
+    domain = await _seed_domain(db_session, user.id, domain_name="mine.com")
+
+    resp = await client.post(
+        "/email-addresses",
+        data={"domain_id": str(domain.id), "local_part": "hello"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    listing = await client.get("/email-addresses")
+    assert "hello@mine.com" in listing.text
+
+    email = (await db_session.execute(select(EmailAddress))).scalar_one()
+    assert email.is_active is True
+
+    await client.post(f"/email-addresses/{email.id}/toggle", follow_redirects=False)
+    await db_session.refresh(email)
+    assert email.is_active is False
+
+    await client.post(f"/email-addresses/{email.id}/delete", follow_redirects=False)
+    await db_session.refresh(email)
+    assert email.is_deleted is True
+
+
+async def test_email_address_invalid_local_part(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """非法本地部分被拒绝并提示，不落库。"""
+    await _web_login(client)
+    user = await _get_user(db_session)
+    domain = await _seed_domain(db_session, user.id)
+
+    resp = await client.post(
+        "/email-addresses",
+        data={"domain_id": str(domain.id), "local_part": "bad space!"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    rows = (await db_session.execute(select(EmailAddress))).scalars().all()
+    assert rows == []
+    listing = await client.get("/email-addresses")
+    assert "输入有误" in listing.text
+
+
+async def test_email_addresses_requires_auth(client: AsyncClient) -> None:
+    resp = await client.get("/email-addresses", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/login")

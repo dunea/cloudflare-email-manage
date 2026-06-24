@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
 
+    # 前端会话 Cookie 是否仅限 HTTPS（生产环境置 true）
+    COOKIE_SECURE: bool = False
+
+    # 仅供 e2e 测试：置 true 时 CloudflareClient 返回内置假数据，不发真实请求
+    CF_FAKE_MODE: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:
