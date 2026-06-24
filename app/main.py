@@ -8,7 +8,7 @@ from fastapi import FastAPI
 # 导入 models 确保所有表注册到 Base.metadata
 import app.models  # noqa: F401
 from app.config import settings
-from app.database import Base, async_session_maker, engine
+from app.database import async_session_maker
 from app.exceptions import register_exception_handlers
 from app.routers import api_router
 from app.services.auth_service import ensure_admin_user
@@ -19,9 +19,11 @@ API_PREFIX = "/api/v1"
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
-    """应用生命周期：启动时建表（幂等）并确保管理员账号存在。"""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """应用生命周期：确保管理员账号存在。
+
+    建表由 Alembic 迁移负责（启动前先执行 ``alembic upgrade head``）。
+    此处不再调用 ``create_all``，避免与迁移产生“表已存在”冲突。
+    """
     async with async_session_maker() as session:
         await ensure_admin_user(session)
     yield
