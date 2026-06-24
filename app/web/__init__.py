@@ -18,6 +18,7 @@ from app.web import (
     inbound,
     outbound,
     profile,
+    seo,
 )
 
 # 聚合路由，由 main.py 挂载到根路径 "/"
@@ -33,5 +34,6 @@ web_router.include_router(outbound.router)
 web_router.include_router(api_keys.router)
 web_router.include_router(profile.router)
 web_router.include_router(admin.router)
+web_router.include_router(seo.router)
 
 __all__ = ["web_router"]

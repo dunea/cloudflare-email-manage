@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}{{ app_name }} · Cloudflare 邮箱与域名邮件管理平台{% endblock %}
+{% block description %}{{ app_name }}：绑定 Cloudflare 账号，集中管理域名邮箱地址与转发规则，使用 Email Sending API 从域名发件、通过 Webhook 收件，并提供 API Key 程序化收发邮件。开源，支持完全自部署。{% endblock %}
+{% block og_title %}{{ app_name }} — Cloudflare 邮箱与域名邮件管理平台{% endblock %}
+
+{% block head_extra %}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "{{ app_name }}",
+  "applicationCategory": "BusinessApplication",
+  "operatingSystem": "Web",
+  "description": "基于 Cloudflare 的邮箱与域名邮件管理平台：绑定 CF 账号、管理邮箱地址与转发规则、通过 API 收发邮件，支持开源自部署。",
+  "url": "{{ request.url.replace(query='') }}",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "author": { "@type": "Person", "name": "nuoyea", "url": "https://t.me/nuoyea" },
+  "softwareHelp": "https://github.com/dunea/cloudflare-email-manage"
+}
+</script>
+{% endblock %}
+
+{% block content %}
+{% set features = [
+  {"icon": "☁️", "title": "绑定 CF 账号", "desc": "支持全部权限或仅指定域名，API Token 使用 Fernet 加密存储，安全可控。"},
+  {"icon": "🌐", "title": "域名与邮箱管理", "desc": "一键同步 Cloudflare 域名，按域名创建和管理任意邮箱地址。"},
+  {"icon": "↪️", "title": "转发规则", "desc": "将邮箱来信转发到外部目标邮箱，自动同步到 Email Routing。"},
+  {"icon": "📤", "title": "域名发件", "desc": "使用 Cloudflare Email Sending API（Beta）直接从你的域名发送邮件。"},
+  {"icon": "📥", "title": "Webhook 收件", "desc": "通过 Worker 把邮件转发到平台并存储，随时查阅收件内容。"},
+  {"icon": "🔑", "title": "API Key", "desc": "携带 X-API-Key 程序化收发邮件，轻松集成到你自己的应用。"},
+] %}
+
+<!-- Hero -->
+<section class="border-b border-slate-200 bg-gradient-to-b from-white to-slate-50">
+  <div class="mx-auto max-w-7xl px-4 py-20 text-center lg:px-8 lg:py-28">
+    <span class="inline-flex items-center gap-1 rounded-full bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
+      ☁️ 基于 Cloudflare Email Routing &amp; Sending
+    </span>
+    <h1 class="mx-auto mt-6 max-w-3xl text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
+      用一个平台，管好你的 Cloudflare 域名邮件
+    </h1>
+    <p class="mx-auto mt-5 max-w-2xl text-lg text-slate-600">
+      绑定 Cloudflare 账号，集中管理域名下的邮箱地址与转发规则，直接从域名发件、通过 Webhook 收件，
+      并用 API Key 程序化收发邮件。开源，支持完全自部署。
+    </p>
+    <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
+      <a href="/register" class="rounded-lg bg-brand px-6 py-3 text-sm font-semibold text-white hover:bg-brand-dark">免费注册</a>
+      <a href="/login" class="rounded-lg border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">登录</a>
+      <a href="https://github.com/dunea/cloudflare-email-manage" target="_blank" rel="noopener noreferrer"
+         class="rounded-lg px-6 py-3 text-sm font-semibold text-slate-600 hover:text-brand">在 GitHub 查看 →</a>
+    </div>
+  </div>
+</section>
+
+<!-- 核心功能 -->
+<section class="mx-auto max-w-7xl px-4 py-16 lg:px-8">
+  <h2 class="text-center text-2xl font-semibold text-slate-900">核心功能</h2>
+  <p class="mx-auto mt-2 max-w-xl text-center text-sm text-slate-500">覆盖 Cloudflare 邮件收发的完整链路</p>
+  <div class="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+    {% for f in features %}
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm transition hover:shadow-md">
+      <div class="flex h-11 w-11 items-center justify-center rounded-lg bg-brand/10 text-xl">{{ f.icon }}</div>
+      <h3 class="mt-4 font-semibold text-slate-900">{{ f.title }}</h3>
+      <p class="mt-2 text-sm leading-relaxed text-slate-600">{{ f.desc }}</p>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<!-- 开源 · 自部署 -->
+<section class="border-t border-slate-200 bg-white">
+  <div class="mx-auto max-w-7xl px-4 py-16 text-center lg:px-8">
+    <h2 class="text-2xl font-semibold text-slate-900">开源 · 可完全自部署</h2>
+    <p class="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-slate-600">
+      代码完全开源，你可以绕过平台直接私有部署，自己掌控 CF API Token 与全部数据。
+      基于 FastAPI + SQLite，部署轻量、依赖极少。
+    </p>
+    <div class="mt-6 flex flex-wrap items-center justify-center gap-3">
+      <a href="https://github.com/dunea/cloudflare-email-manage" target="_blank" rel="noopener noreferrer"
+         class="rounded-lg bg-slate-900 px-6 py-3 text-sm font-semibold text-white hover:bg-slate-700">GitHub 开源仓库</a>
+      <a href="https://t.me/nuoyea" target="_blank" rel="noopener noreferrer"
+         class="rounded-lg border border-slate-300 px-6 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">联系作者 @nuoyea</a>
+    </div>
+  </div>
+</section>
+{% endblock %}

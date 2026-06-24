@@ -8,12 +8,23 @@
 </div>
 
 {% if new_key %}
-<div class="mb-6 rounded-xl border border-green-200 bg-green-50 p-5">
-  <p class="mb-2 text-sm font-semibold text-green-800">新 API Key（仅显示一次，请立即复制保存）</p>
-  <div class="flex items-center gap-2">
-    <code class="flex-1 overflow-x-auto rounded-lg bg-white px-3 py-2 font-mono text-sm text-slate-800 ring-1 ring-green-200">{{ new_key }}</code>
-    <button type="button" onclick="copyToClipboard('{{ new_key }}', this)"
-            class="shrink-0 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700">复制</button>
+<!-- 一次性明文：以模态 Dialog 弹出（去内联），创建后自动打开 -->
+<div x-data="{ open: true }" x-show="open" x-cloak
+     class="fixed inset-0 z-[80] flex items-center justify-center p-4"
+     @keydown.escape.window="open = false">
+  <div class="absolute inset-0 bg-slate-900/50" @click="open = false"></div>
+  <div x-show="open" x-transition class="relative w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
+    <h3 class="text-base font-semibold text-slate-900">新 API Key 已创建</h3>
+    <p class="mt-1 text-sm text-amber-600">仅显示一次，请立即复制保存。关闭后将无法再次查看。</p>
+    <div class="mt-4 flex items-center gap-2">
+      <code class="flex-1 overflow-x-auto rounded-lg bg-slate-50 px-3 py-2 font-mono text-sm text-slate-800 ring-1 ring-slate-200">{{ new_key }}</code>
+      <button type="button" onclick="copyToClipboard('{{ new_key }}', this)"
+              class="shrink-0 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">复制</button>
+    </div>
+    <div class="mt-5 flex justify-end">
+      <button type="button" @click="open = false"
+              class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">我已保存</button>
+    </div>
   </div>
 </div>
 {% endif %}
@@ -62,7 +73,7 @@
               <button type="submit" class="text-sm font-medium text-brand hover:underline">{{ "停用" if k.is_active else "启用" }}</button>
             </form>
             <form method="post" action="/api-keys/{{ k.id }}/delete"
-                  onsubmit="return confirm('撤销后使用该 Key 的程序将无法访问，确定撤销？');">
+                  x-data @submit.prevent="$store.confirm.ask($el, '撤销后使用该 Key 的程序将无法访问，确定撤销？')">
               <button type="submit" class="text-sm font-medium text-red-600 hover:underline">撤销</button>
             </form>
           </div>

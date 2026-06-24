@@ -87,6 +87,33 @@ def test_full_cf_flow(page: Page, live_server: str) -> None:
     expect(page.locator("body")).to_contain_text("邮件已发送")
 
 
+def test_nav_submenu(page: Page, live_server: str) -> None:
+    """顶部二级菜单：点击「邮件」分组展开下拉，子项可正常导航。"""
+    _signup_login(page, live_server)
+    # 默认视口 1280×720 ≥ lg，桌面横向导航可见；点击分组按钮展开下拉
+    page.get_by_role("button", name="邮件").click()
+    page.get_by_role("link", name="收件箱").click()
+    page.wait_for_url(f"{live_server}/inbound")
+    expect(page.locator("body")).to_contain_text("收件箱")
+
+
+def test_delete_uses_confirm_dialog(page: Page, live_server: str) -> None:
+    """删除走自定义确认 Dialog（替代原生 confirm）：撤销 API Key。"""
+    _signup_login(page, live_server)
+    page.goto(f"{live_server}/api-keys")
+    page.fill('input[name="name"]', "to-revoke")
+    page.get_by_role("button", name="创建 API Key").click()
+    # 新 Key 以模态弹出，先关闭
+    expect(page.locator("body")).to_contain_text("仅显示一次")
+    page.get_by_role("button", name="我已保存").click()
+    # 点「撤销」应弹出自定义确认弹窗（依赖 $store.confirm 注册成功）
+    page.get_by_role("button", name="撤销").click()
+    expect(page.get_by_text("确认操作")).to_be_visible()
+    # 点「确认」提交表单，Key 被撤销并提示
+    page.get_by_role("button", name="确认", exact=True).click()
+    expect(page.locator("body")).to_contain_text("已撤销 API Key")
+
+
 def test_api_key_created_once(page: Page, live_server: str) -> None:
     """创建 API Key 时一次性展示原文，刷新后不再显示。"""
     _signup_login(page, live_server)

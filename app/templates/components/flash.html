@@ -1,3 +1,6 @@
+{# 服务端 flash 消息：渲染为右上角浮层 toast 卡片（位于 base.html 的固定容器内）。
+   文案服务端渲染，确保单测 `in resp.text` 与 e2e `to_contain_text` 仍可断言。
+   success/info 自动消失；error/warning 常驻直到手动关闭。 #}
 {% if flashes %}
 {% set styles = {
   "success": "bg-green-50 text-green-800 border-green-200",
@@ -5,13 +8,12 @@
   "warning": "bg-amber-50 text-amber-800 border-amber-200",
   "info": "bg-sky-50 text-sky-800 border-sky-200",
 } %}
-<div class="mb-4 space-y-2">
-  {% for f in flashes %}
-  <div x-data="{ show: true }" x-show="show"
-       class="flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-sm {{ styles.get(f.category, styles['info']) }}">
-    <span>{{ f.message }}</span>
-    <button type="button" @click="show = false" class="opacity-60 hover:opacity-100">✕</button>
-  </div>
-  {% endfor %}
+{% for f in flashes %}
+<div x-data="{ show: true }" x-show="show" x-transition.opacity
+     {% if f.category in ['success', 'info'] %}x-init="setTimeout(() => show = false, 6000)"{% endif %}
+     class="pointer-events-auto flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-sm shadow-lg {{ styles.get(f.category, styles['info']) }}">
+  <span>{{ f.message }}</span>
+  <button type="button" @click="show = false" class="shrink-0 opacity-60 hover:opacity-100">✕</button>
 </div>
+{% endfor %}
 {% endif %}
