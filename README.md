@@ -77,8 +77,29 @@ pytest tests/
 
 ## Webhook 收件配置
 
-收件依赖在 Cloudflare Worker 中将邮件转发到本平台的 Webhook 端点，
-并使用 `CF_WEBHOOK_SECRET` 校验签名。具体 Worker 配置步骤将在收件功能文档中说明。
+收件依赖在 Cloudflare Worker（Email Routing 触发）中将邮件 `POST` 到本平台的
+Webhook 端点 `POST /api/v1/inbound/webhook`。请求体为 JSON：
+
+```json
+{ "to": "hello@example.com", "from": "sender@x.com", "subject": "...", "text": "...", "html": "..." }
+```
+
+平台对**原始请求体字节**使用 `CF_WEBHOOK_SECRET` 计算 `HMAC-SHA256` 十六进制摘要，
+Worker 需将该摘要放入请求头 `X-Webhook-Signature`，平台以常量时间比较校验，校验失败返回 401。
+Worker 侧签名示例：
+
+```js
+const sig = await crypto.subtle.sign(
+  "HMAC",
+  await crypto.subtle.importKey("raw", enc.encode(CF_WEBHOOK_SECRET),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]),
+  body, // 与请求体完全一致的字节
+);
+// 将 sig 转为 hex 后写入 X-Webhook-Signature 头
+```
+
+收到的邮件按收件地址（`to`）归属对应用户，可通过
+`GET /api/v1/inbound`、`GET /api/v1/inbound/{id}`（需 JWT）查询。
 
 ## API 约定
 
