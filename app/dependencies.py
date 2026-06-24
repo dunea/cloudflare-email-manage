@@ -2,13 +2,14 @@
 
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Header
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
 from app.exceptions import AuthError, PermissionError
 from app.models import User
+from app.services.api_key_service import authenticate_api_key
 from app.services.auth_service import ACCESS_TOKEN_TYPE, decode_token
 from app.services.user_service import get_user_by_id
 
@@ -19,17 +20,9 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 _bearer_scheme = HTTPBearer(auto_error=False, description="JWT 访问令牌")
 
 
-async def get_current_user(
-    session: SessionDep,
-    credentials: Annotated[
-        HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)
-    ],
-) -> User:
-    """从 Authorization Bearer 令牌解析并返回当前登录用户。"""
-    if credentials is None:
-        raise AuthError("缺少认证凭证")
-
-    payload = decode_token(credentials.credentials)
+async def _user_from_access_token(session: AsyncSession, token: str) -> User:
+    """从访问令牌解析并返回用户，校验失败抛出 AuthError。"""
+    payload = decode_token(token)
     if payload.get("type") != ACCESS_TOKEN_TYPE:
         raise AuthError("无效的访问令牌")
 
@@ -43,8 +36,39 @@ async def get_current_user(
     return user
 
 
+async def get_current_user(
+    session: SessionDep,
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)
+    ],
+) -> User:
+    """从 Authorization Bearer 令牌解析并返回当前登录用户。"""
+    if credentials is None:
+        raise AuthError("缺少认证凭证")
+    return await _user_from_access_token(session, credentials.credentials)
+
+
 # 当前登录用户依赖别名
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+async def get_request_user(
+    session: SessionDep,
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)
+    ],
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
+) -> User:
+    """支持 JWT Bearer 或 X-API-Key 两种认证方式（程序化调用），任一通过即可。"""
+    if x_api_key:
+        return await authenticate_api_key(session, x_api_key)
+    if credentials is not None:
+        return await _user_from_access_token(session, credentials.credentials)
+    raise AuthError("缺少认证凭证")
+
+
+# 兼容 JWT 与 API Key 的用户依赖别名
+RequestUser = Annotated[User, Depends(get_request_user)]
 
 
 async def require_admin(current_user: CurrentUser) -> User:
