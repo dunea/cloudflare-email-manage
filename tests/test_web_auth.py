@@ -20,11 +20,30 @@ async def test_register_page_renders(client: AsyncClient) -> None:
     assert "注册" in resp.text
 
 
-async def test_root_redirects_to_login_when_anonymous(client: AsyncClient) -> None:
-    """未登录访问首页重定向到登录页。"""
+async def test_root_renders_landing_when_anonymous(client: AsyncClient) -> None:
+    """未登录访问首页渲染营销落地页（可被搜索引擎抓取）。"""
+    resp = await client.get("/", follow_redirects=False)
+    assert resp.status_code == 200
+    assert "免费注册" in resp.text
+    # SEO 元信息存在
+    assert 'name="description"' in resp.text
+    assert 'property="og:title"' in resp.text
+
+
+async def test_root_redirects_to_dashboard_when_authed(client: AsyncClient) -> None:
+    """已登录访问首页重定向到仪表盘。"""
+    await client.post(
+        "/register",
+        data={
+            "username": "carol",
+            "email": "carol@example.com",
+            "password": "password123",
+        },
+    )
+    await client.post("/login", data={"username": "carol", "password": "password123"})
     resp = await client.get("/", follow_redirects=False)
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/login"
+    assert resp.headers["location"] == "/dashboard"
 
 
 async def test_dashboard_requires_auth(client: AsyncClient) -> None:

@@ -4,6 +4,24 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
+
+  <!-- SEO 基础元信息（子页可通过 block 覆写） -->
+  <meta name="description" content="{% block description %}{{ app_description }}{% endblock %}" />
+  <meta name="robots" content="{% block robots %}{{ 'noindex, nofollow' if current_user else 'index, follow' }}{% endblock %}" />
+  <link rel="canonical" href="{% block canonical %}{{ request.url.replace(query='') }}{% endblock %}" />
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="{{ app_name }}" />
+  <meta property="og:title" content="{% block og_title %}{{ self.title() }}{% endblock %}" />
+  <meta property="og:description" content="{% block og_description %}{{ self.description() }}{% endblock %}" />
+  <meta property="og:url" content="{{ request.url.replace(query='') }}" />
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="{{ self.og_title() }}" />
+  <meta name="twitter:description" content="{{ self.og_description() }}" />
+  <!-- Emoji favicon（内联 SVG，消除 /favicon.ico 404） -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📨</text></svg>" />
+
   <!-- TailwindCSS：Play CDN（零构建，运行时联网加载） -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -15,25 +33,32 @@
       },
     };
   </script>
-  <!-- Alpine.js：轻量交互（导航折叠、下拉菜单、复制等） -->
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <!-- app.js 必须在 Alpine 之前加载：保证 alpine:init 监听器在 Alpine 启动前注册，
+       从而 Alpine.store('confirm') 与 Alpine.data('toastHost') 能被正确注册。 -->
   <script defer src="/static/js/app.js"></script>
+  <!-- Alpine.js：轻量交互（导航下拉、确认弹窗、toast 等） -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
   <style>[x-cloak]{display:none !important;}</style>
+  {% block head_extra %}{% endblock %}
 </head>
 <body class="flex min-h-screen flex-col bg-slate-50 text-slate-800 antialiased">
-  {% set nav_items = [
-    {"key": "dashboard", "label": "仪表盘", "href": "/dashboard", "icon": "🏠"},
-    {"key": "cf_accounts", "label": "CF 账号", "href": "/cf-accounts", "icon": "☁️"},
-    {"key": "domains", "label": "域名", "href": "/domains", "icon": "🌐"},
-    {"key": "email_addresses", "label": "邮箱地址", "href": "/email-addresses", "icon": "📧"},
-    {"key": "forwarding_rules", "label": "转发规则", "href": "/forwarding-rules", "icon": "↪️"},
-    {"key": "inbound", "label": "收件箱", "href": "/inbound", "icon": "📥"},
-    {"key": "outbound", "label": "发件", "href": "/outbound", "icon": "📤"},
-    {"key": "api_keys", "label": "API Key", "href": "/api-keys", "icon": "🔑"},
+  {% set nav_groups = [
+    {"type": "link", "key": "dashboard", "label": "仪表盘", "href": "/dashboard", "icon": "🏠"},
+    {"type": "group", "label": "邮件", "icon": "✉️", "children": [
+      {"key": "email_addresses", "label": "邮箱地址", "href": "/email-addresses", "icon": "📧"},
+      {"key": "forwarding_rules", "label": "转发规则", "href": "/forwarding-rules", "icon": "↪️"},
+      {"key": "inbound", "label": "收件箱", "href": "/inbound", "icon": "📥"},
+      {"key": "outbound", "label": "发件", "href": "/outbound", "icon": "📤"},
+    ]},
+    {"type": "group", "label": "Cloudflare", "icon": "☁️", "children": [
+      {"key": "cf_accounts", "label": "CF 账号", "href": "/cf-accounts", "icon": "☁️"},
+      {"key": "domains", "label": "域名", "href": "/domains", "icon": "🌐"},
+    ]},
+    {"type": "link", "key": "api_keys", "label": "API Key", "href": "/api-keys", "icon": "🔑"},
   ] %}
 
   {% if current_user %}
-  <!-- 顶部导航 -->
+  <!-- 顶部导航（登录态） -->
   <header x-data="{ mobileNav: false }" @click.outside="mobileNav = false"
           class="sticky top-0 z-30 border-b border-slate-200 bg-white">
     <div class="mx-auto flex h-16 w-full max-w-7xl items-center gap-2 px-4 lg:gap-4 lg:px-8">
@@ -43,13 +68,33 @@
         <span class="hidden text-lg font-semibold text-slate-900 sm:block">{{ app_name }}</span>
       </a>
 
-      <!-- 桌面横向导航 -->
+      <!-- 桌面横向导航（含二级下拉菜单） -->
       <nav class="hidden flex-1 items-center gap-1 lg:flex">
-        {% for item in nav_items %}
-        <a href="{{ item.href }}"
-           class="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm font-medium transition {{ 'bg-brand text-white' if active == item.key else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900' }}">
-          <span>{{ item.icon }}</span><span>{{ item.label }}</span>
-        </a>
+        {% for group in nav_groups %}
+          {% if group.type == "link" %}
+          <a href="{{ group.href }}"
+             class="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm font-medium transition {{ 'bg-brand text-white' if active == group.key else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900' }}">
+            <span>{{ group.icon }}</span><span>{{ group.label }}</span>
+          </a>
+          {% else %}
+          {% set child_keys = group.children | map(attribute='key') | list %}
+          <div x-data="{ open: false }" @click.outside="open = false" class="relative">
+            <button @click="open = !open"
+                    class="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm font-medium transition {{ 'bg-brand text-white' if active in child_keys else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900' }}">
+              <span>{{ group.icon }}</span><span>{{ group.label }}</span>
+              <span class="text-[10px] transition-transform" :class="open && 'rotate-180'">▼</span>
+            </button>
+            <div x-show="open" x-cloak x-transition
+                 class="absolute left-0 mt-1 w-48 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+              {% for child in group.children %}
+              <a href="{{ child.href }}"
+                 class="flex items-center gap-2 px-4 py-2 text-sm {{ 'bg-brand/10 font-medium text-brand' if active == child.key else 'text-slate-600 hover:bg-slate-50' }}">
+                <span>{{ child.icon }}</span><span>{{ child.label }}</span>
+              </a>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
         {% endfor %}
         {% if current_user.role == "admin" %}
         <a href="/admin/users"
@@ -83,14 +128,24 @@
       </div>
     </div>
 
-    <!-- 移动端折叠导航 -->
+    <!-- 移动端折叠导航（按分组展示） -->
     <nav x-show="mobileNav" x-cloak @click="mobileNav = false"
          class="space-y-1 border-t border-slate-200 bg-white px-3 py-2 lg:hidden">
-      {% for item in nav_items %}
-      <a href="{{ item.href }}"
-         class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium {{ 'bg-brand text-white' if active == item.key else 'text-slate-700 hover:bg-slate-100' }}">
-        <span>{{ item.icon }}</span><span>{{ item.label }}</span>
-      </a>
+      {% for group in nav_groups %}
+        {% if group.type == "link" %}
+        <a href="{{ group.href }}"
+           class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium {{ 'bg-brand text-white' if active == group.key else 'text-slate-700 hover:bg-slate-100' }}">
+          <span>{{ group.icon }}</span><span>{{ group.label }}</span>
+        </a>
+        {% else %}
+        <p class="px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-wider text-slate-400">{{ group.label }}</p>
+        {% for child in group.children %}
+        <a href="{{ child.href }}"
+           class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium {{ 'bg-brand text-white' if active == child.key else 'text-slate-700 hover:bg-slate-100' }}">
+          <span>{{ child.icon }}</span><span>{{ child.label }}</span>
+        </a>
+        {% endfor %}
+        {% endif %}
       {% endfor %}
       {% if current_user.role == "admin" %}
       <a href="/admin/users"
@@ -100,18 +155,27 @@
       {% endif %}
     </nav>
   </header>
+  {% else %}
+  <!-- 公共顶栏（未登录态：落地页 / 登录 / 注册） -->
+  <header class="border-b border-slate-200 bg-white">
+    <div class="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 lg:px-8">
+      <a href="/" class="flex items-center gap-2">
+        <span class="text-2xl">📨</span>
+        <span class="text-lg font-semibold text-slate-900">{{ app_name }}</span>
+      </a>
+      <nav class="flex items-center gap-2">
+        <a href="/login"
+           class="rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900">登录</a>
+        <a href="/register"
+           class="rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-dark">注册</a>
+      </nav>
+    </div>
+  </header>
   {% endif %}
 
-  <!-- 主区域 -->
-  <main class="flex-1 {% if current_user %}px-4 py-6 lg:px-8{% else %}flex flex-col items-center justify-center px-4 py-10{% endif %}">
-    {% if not current_user %}
-    <div class="mb-6 flex items-center gap-2">
-      <span class="text-3xl">📨</span>
-      <span class="text-xl font-semibold text-slate-900">{{ app_name }}</span>
-    </div>
-    {% endif %}
-    <div class="{% if not current_user %}w-full max-w-md{% else %}mx-auto w-full max-w-6xl{% endif %}">
-      {% include "components/flash.html" %}
+  <!-- 主区域：app（宽栏）/ landing（全宽）/ auth（居中表单）三态 -->
+  <main class="flex-1 {% if current_user %}px-4 py-6 lg:px-8{% elif layout == 'landing' %}{% else %}flex flex-col items-center justify-center px-4 py-10{% endif %}">
+    <div class="{% if current_user %}mx-auto w-full max-w-6xl{% elif layout == 'landing' %}w-full{% else %}w-full max-w-md{% endif %}">
       {% block content %}{% endblock %}
     </div>
   </main>
@@ -128,5 +192,38 @@
       </p>
     </div>
   </footer>
+
+  <!-- 全局浮层：服务端 flash（toast 卡片）+ 客户端 toast -->
+  <div class="pointer-events-none fixed right-4 top-4 z-[70] flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2">
+    {% include "components/flash.html" %}
+    <div x-data="toastHost()">
+      <template x-for="t in items" :key="t.id">
+        <div x-show="t.show" x-transition.opacity
+             class="pointer-events-auto mb-2 flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-sm shadow-lg"
+             :class="styles[t.category] || styles.info">
+          <span x-text="t.message"></span>
+          <button type="button" @click="remove(t.id)" class="opacity-60 hover:opacity-100">✕</button>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- 全局确认弹窗（替代浏览器原生 confirm） -->
+  <div x-data x-cloak x-show="$store.confirm.open"
+       class="fixed inset-0 z-[80] flex items-center justify-center p-4"
+       @keydown.escape.window="$store.confirm.no()">
+    <div class="absolute inset-0 bg-slate-900/50" @click="$store.confirm.no()"></div>
+    <div x-show="$store.confirm.open" x-transition
+         class="relative w-full max-w-sm rounded-xl bg-white p-6 shadow-xl">
+      <h3 class="text-base font-semibold text-slate-900">确认操作</h3>
+      <p class="mt-2 text-sm text-slate-600" x-text="$store.confirm.message"></p>
+      <div class="mt-5 flex justify-end gap-3">
+        <button type="button" @click="$store.confirm.no()"
+                class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">取消</button>
+        <button type="button" @click="$store.confirm.yes()"
+                class="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700">确认</button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>

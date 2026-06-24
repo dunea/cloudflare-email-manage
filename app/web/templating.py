@@ -27,6 +27,12 @@ def _format_dt(value: datetime | None) -> str:
 
 templates.env.filters["dt"] = _format_dt
 
+# 站点默认 SEO 描述（首页等未覆写 description block 时使用）
+APP_DESCRIPTION = (
+    "基于 Cloudflare 的邮箱与域名邮件管理平台："
+    "绑定 CF 账号、管理邮箱地址与转发规则、通过 API 收发邮件，支持开源自部署。"
+)
+
 # flash 消息在会话中的存储键
 _FLASH_KEY = "_flash"
 
@@ -74,7 +80,9 @@ def render(
         "current_user": user,
         "app_name": settings.APP_NAME,
         "app_version": settings.APP_VERSION,
+        "app_description": APP_DESCRIPTION,
         "active": active,
+        "layout": None,
         "flashes": pop_flashes(request),
     }
     base_context.update(context)

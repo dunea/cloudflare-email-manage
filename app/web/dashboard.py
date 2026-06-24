@@ -19,10 +19,11 @@ router = APIRouter(tags=["前端-仪表盘"])
 
 
 @router.get("/")
-async def index(user: OptionalWebUser) -> RedirectResponse:
-    """站点首页：已登录跳仪表盘，否则跳登录页。"""
-    target = "/dashboard" if user is not None else "/login"
-    return RedirectResponse(target, status_code=303)
+async def index(request: Request, user: OptionalWebUser) -> Response:
+    """站点首页：已登录跳仪表盘，未登录展示营销落地页（可被搜索引擎抓取）。"""
+    if user is not None:
+        return RedirectResponse("/dashboard", status_code=303)
+    return render(request, "index.html", user=None, layout="landing")
 
 
 @router.get("/dashboard")

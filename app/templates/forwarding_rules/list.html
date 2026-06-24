@@ -58,7 +58,7 @@
               <button type="submit" class="text-sm font-medium text-brand hover:underline">{{ "停用" if r.is_active else "启用" }}</button>
             </form>
             <form method="post" action="/forwarding-rules/{{ r.id }}/delete"
-                  onsubmit="return confirm('确定删除该转发规则？将同步删除 CF 规则。');">
+                  x-data @submit.prevent="$store.confirm.ask($el, '确定删除该转发规则？将同步删除 CF 规则。')">
               <button type="submit" class="text-sm font-medium text-red-600 hover:underline">删除</button>
             </form>
           </div>
