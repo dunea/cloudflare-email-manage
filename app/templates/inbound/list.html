@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% from "components/macros.html" import empty_state, pagination %}
+{% block title %}收件箱 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-semibold text-slate-900">收件箱</h1>
+  <p class="mt-1 text-sm text-slate-500">通过 Webhook 接收并存储的邮件</p>
+</div>
+
+{% if options %}
+<form method="get" action="/inbound" class="mb-4 flex items-center gap-2 text-sm">
+  <label class="text-slate-500">按收件地址过滤：</label>
+  <select name="to_address" onchange="this.form.submit()"
+          class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-brand focus:outline-none">
+    <option value="">全部地址</option>
+    {% for o in options %}
+    <option value="{{ o.full_address }}" {% if to_address == o.full_address %}selected{% endif %}>{{ o.full_address }}</option>
+    {% endfor %}
+  </select>
+</form>
+{% endif %}
+
+{% if emails %}
+<div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+  <table class="w-full text-sm">
+    <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
+      <tr>
+        <th class="px-4 py-3">收件地址</th>
+        <th class="px-4 py-3">主题</th>
+        <th class="px-4 py-3">发件人</th>
+        <th class="px-4 py-3">时间</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100">
+      {% for m in emails %}
+      <tr class="cursor-pointer hover:bg-slate-50" onclick="window.location='/inbound/{{ m.id }}'">
+        <td class="px-4 py-3 font-mono text-slate-700">{{ m.to_address }}</td>
+        <td class="px-4 py-3 font-medium text-slate-700">{{ m.subject or "(无主题)" }}</td>
+        <td class="px-4 py-3 text-slate-500">{{ m.from_address }}</td>
+        <td class="px-4 py-3 text-slate-400">{{ m.received_at | dt }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{{ pagination(page, size, total, "/inbound") }}
+{% else %}
+{{ empty_state("收件箱为空。配置 Cloudflare Worker 将邮件 Webhook 转发到本平台后，邮件会显示在这里。") }}
+{% endif %}
+{% endblock %}

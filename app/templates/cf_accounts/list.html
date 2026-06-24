@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% from "components/macros.html" import badge, empty_state, pagination %}
+{% block title %}CF 账号 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="mb-6 flex items-center justify-between">
+  <div>
+    <h1 class="text-2xl font-semibold text-slate-900">CF 账号</h1>
+    <p class="mt-1 text-sm text-slate-500">绑定你的 Cloudflare 账号以管理域名与邮件</p>
+  </div>
+  <a href="/cf-accounts/new"
+     class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">+ 绑定账号</a>
+</div>
+
+{% if accounts %}
+<div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+  <table class="w-full text-sm">
+    <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
+      <tr>
+        <th class="px-4 py-3">名称</th>
+        <th class="px-4 py-3">Account ID</th>
+        <th class="px-4 py-3">权限</th>
+        <th class="px-4 py-3">状态</th>
+        <th class="px-4 py-3">创建时间</th>
+        <th class="px-4 py-3 text-right">操作</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100">
+      {% for a in accounts %}
+      <tr class="hover:bg-slate-50">
+        <td class="px-4 py-3">
+          <a href="/cf-accounts/{{ a.id }}" class="font-medium text-slate-700 hover:text-brand">{{ a.name }}</a>
+        </td>
+        <td class="px-4 py-3 font-mono text-xs text-slate-500">{{ a.account_id }}</td>
+        <td class="px-4 py-3 text-slate-600">{{ "全部域名" if a.permission_type == "all" else "指定域名" }}</td>
+        <td class="px-4 py-3">
+          {% if a.is_active %}{{ badge("启用", "green") }}{% else %}{{ badge("停用", "slate") }}{% endif %}
+        </td>
+        <td class="px-4 py-3 text-slate-400">{{ a.created_at | dt }}</td>
+        <td class="px-4 py-3 text-right">
+          <a href="/cf-accounts/{{ a.id }}" class="text-sm font-medium text-brand hover:underline">管理</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{{ pagination(page, size, total, "/cf-accounts") }}
+{% else %}
+{{ empty_state("还没有绑定 CF 账号，点击右上角「绑定账号」开始。") }}
+{% endif %}
+{% endblock %}

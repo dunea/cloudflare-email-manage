@@ -1,0 +1,35 @@
+{# 可复用模板片段（macros）。后续 goal 的列表/表单页面复用。 #}
+
+{% macro badge(text, color="slate") -%}
+<span class="inline-flex items-center rounded-full bg-{{ color }}-100 px-2.5 py-0.5 text-xs font-medium text-{{ color }}-700">{{ text }}</span>
+{%- endmacro %}
+
+{% macro empty_state(message="暂无数据") -%}
+<div class="rounded-xl border border-dashed border-slate-300 py-12 text-center text-sm text-slate-400">{{ message }}</div>
+{%- endmacro %}
+
+{% macro page_header(title, subtitle="") -%}
+<div class="mb-6">
+  <h1 class="text-2xl font-semibold text-slate-900">{{ title }}</h1>
+  {% if subtitle %}<p class="mt-1 text-sm text-slate-500">{{ subtitle }}</p>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro pagination(page, size, total, base_url) -%}
+{% set pages = (total + size - 1) // size if total else 0 %}
+{% if pages > 1 %}
+<nav class="mt-4 flex items-center justify-between text-sm">
+  <span class="text-slate-500">共 {{ total }} 条 · 第 {{ page }}/{{ pages }} 页</span>
+  <div class="flex gap-2">
+    {% if page > 1 %}
+    <a href="{{ base_url }}?page={{ page - 1 }}&size={{ size }}"
+       class="rounded-lg border border-slate-300 px-3 py-1.5 hover:bg-slate-50">上一页</a>
+    {% endif %}
+    {% if page < pages %}
+    <a href="{{ base_url }}?page={{ page + 1 }}&size={{ size }}"
+       class="rounded-lg border border-slate-300 px-3 py-1.5 hover:bg-slate-50">下一页</a>
+    {% endif %}
+  </div>
+</nav>
+{% endif %}
+{%- endmacro %}

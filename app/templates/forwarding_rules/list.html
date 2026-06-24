@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% from "components/macros.html" import badge, empty_state, pagination %}
+{% block title %}转发规则 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-semibold text-slate-900">转发规则</h1>
+  <p class="mt-1 text-sm text-slate-500">将发往某邮箱地址的邮件转发到外部目标邮箱（同步至 Cloudflare Email Routing）</p>
+</div>
+
+{% if options %}
+<form method="post" action="/forwarding-rules"
+      class="mb-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+  <div class="min-w-[200px] flex-1">
+    <label class="mb-1 block text-sm font-medium text-slate-700">源邮箱地址</label>
+    <select name="email_address_id" required
+            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+      {% for o in options %}
+      <option value="{{ o.id }}">{{ o.full_address }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="flex items-end pb-2 text-slate-400">→</div>
+  <div class="min-w-[200px] flex-1">
+    <label class="mb-1 block text-sm font-medium text-slate-700">转发目标邮箱</label>
+    <input name="destination_email" type="email" required placeholder="dest@example.com"
+           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+  </div>
+  <button type="submit" class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">创建</button>
+</form>
+{% else %}
+<div class="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+  还没有邮箱地址，请先在「邮箱地址」创建后再添加转发规则。
+</div>
+{% endif %}
+
+{% if rules %}
+<div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+  <table class="w-full text-sm">
+    <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
+      <tr>
+        <th class="px-4 py-3">源邮箱</th>
+        <th class="px-4 py-3">转发目标</th>
+        <th class="px-4 py-3">CF 规则</th>
+        <th class="px-4 py-3">状态</th>
+        <th class="px-4 py-3 text-right">操作</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100">
+      {% for r in rules %}
+      <tr class="hover:bg-slate-50">
+        <td class="px-4 py-3 font-mono text-slate-700">{{ email_map.get(r.email_address_id, "邮箱#" ~ r.email_address_id) }}</td>
+        <td class="px-4 py-3 font-mono text-slate-600">{{ r.destination_email }}</td>
+        <td class="px-4 py-3">{% if r.cf_rule_id %}{{ badge("已同步", "green") }}{% else %}{{ badge("未同步", "amber") }}{% endif %}</td>
+        <td class="px-4 py-3">{% if r.is_active %}{{ badge("启用", "green") }}{% else %}{{ badge("停用", "slate") }}{% endif %}</td>
+        <td class="px-4 py-3">
+          <div class="flex items-center justify-end gap-3">
+            <form method="post" action="/forwarding-rules/{{ r.id }}/toggle">
+              <button type="submit" class="text-sm font-medium text-brand hover:underline">{{ "停用" if r.is_active else "启用" }}</button>
+            </form>
+            <form method="post" action="/forwarding-rules/{{ r.id }}/delete"
+                  onsubmit="return confirm('确定删除该转发规则？将同步删除 CF 规则。');">
+              <button type="submit" class="text-sm font-medium text-red-600 hover:underline">删除</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{{ pagination(page, size, total, "/forwarding-rules") }}
+{% else %}
+{{ empty_state("还没有转发规则。") }}
+{% endif %}
+{% endblock %}

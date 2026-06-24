@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}绑定 CF 账号 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="mb-6">
+  <a href="/cf-accounts" class="text-sm text-slate-500 hover:text-brand">← 返回列表</a>
+  <h1 class="mt-2 text-2xl font-semibold text-slate-900">绑定 CF 账号</h1>
+</div>
+
+<div class="grid gap-6 lg:grid-cols-3">
+  <form method="post" action="/cf-accounts"
+        class="space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2"
+        x-data="{ ptype: '{{ form.permission_type | default('all') }}' }">
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">名称</label>
+      <input name="name" value="{{ form.name | default('') }}" required maxlength="128"
+             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+    </div>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Account ID</label>
+      <input name="account_id" value="{{ form.account_id | default('') }}" required maxlength="64"
+             class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+      <p class="mt-1 text-xs text-slate-400">在 Cloudflare 控制台域名 Overview 右下角可找到 Account ID</p>
+    </div>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">API Token</label>
+      <input name="api_token" type="password" required
+             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+      <p class="mt-1 text-xs text-slate-400">仅用于绑定校验，加密存储、绝不回显</p>
+    </div>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">权限范围</label>
+      <div class="flex gap-4 text-sm">
+        <label class="flex items-center gap-2">
+          <input type="radio" name="permission_type" value="all" x-model="ptype" /> 全部域名
+        </label>
+        <label class="flex items-center gap-2">
+          <input type="radio" name="permission_type" value="specific" x-model="ptype" /> 指定域名
+        </label>
+      </div>
+    </div>
+    <div x-show="ptype === 'specific'" x-cloak>
+      <label class="mb-1 block text-sm font-medium text-slate-700">允许的 Zone ID</label>
+      <textarea name="allowed_zone_ids" rows="3" placeholder="多个用逗号或换行分隔"
+                class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">{{ form.allowed_zone_ids | default('') }}</textarea>
+    </div>
+    <button type="submit"
+            class="rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark">校验并绑定</button>
+  </form>
+
+  <aside class="rounded-xl border border-slate-200 bg-slate-50 p-6 text-sm">
+    <h3 class="font-semibold text-slate-800">API Token 所需权限</h3>
+    <ul class="mt-3 space-y-2">
+      {% for perm, desc in permissions %}
+      <li>
+        <code class="rounded bg-white px-1.5 py-0.5 text-xs text-slate-700 ring-1 ring-slate-200">{{ perm }}</code>
+        <span class="ml-1 text-slate-500">{{ desc }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="mt-4 text-xs text-slate-400">在 Cloudflare 控制台 → My Profile → API Tokens → Create Token 创建自定义 Token。</p>
+  </aside>
+</div>
+{% endblock %}

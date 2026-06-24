@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}登录 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+  <h1 class="mb-1 text-2xl font-semibold text-slate-900">登录</h1>
+  <p class="mb-6 text-sm text-slate-500">登录以管理你的 Cloudflare 邮箱</p>
+
+  <form method="post" action="/login" class="space-y-4" x-data="{ show: false }">
+    <input type="hidden" name="next" value="{{ form.next | default('/dashboard') }}" />
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">用户名或邮箱</label>
+      <input name="username" value="{{ form.username | default('') }}" required autofocus
+             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+    </div>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">密码</label>
+      <div class="relative">
+        <input name="password" :type="show ? 'text' : 'password'" required
+               class="w-full rounded-lg border border-slate-300 px-3 py-2 pr-14 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+        <button type="button" tabindex="-1" @click="show = !show"
+                class="absolute inset-y-0 right-0 px-3 text-xs text-slate-400 hover:text-slate-600"
+                x-text="show ? '隐藏' : '显示'"></button>
+      </div>
+    </div>
+    <button type="submit"
+            class="w-full rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-dark">登录</button>
+  </form>
+
+  <p class="mt-6 text-center text-sm text-slate-500">
+    还没有账号？<a href="/register" class="font-medium text-brand hover:underline">立即注册</a>
+  </p>
+</div>
+{% endblock %}

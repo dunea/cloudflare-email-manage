@@ -50,9 +50,26 @@ uvicorn app.main:app --reload
 
 启动后访问：
 
+- **前端网站：<http://localhost:8000/>**（注册 / 登录后使用完整界面）
 - Swagger 文档：<http://localhost:8000/api/v1/docs>
 - ReDoc 文档：<http://localhost:8000/api/v1/redoc>
 - 健康检查：<http://localhost:8000/api/v1/health>
+
+## 前端网站
+
+项目内置服务端渲染（**FastAPI + Jinja2 + TailwindCSS + Alpine.js**）的 Web 界面，
+普通用户可在浏览器完成全部操作，无需直接调用 API：
+
+- 注册 / 登录 / 登出（基于 HttpOnly Cookie 会话）
+- 仪表盘：资源统计与最近收件
+- 绑定 / 管理 CF 账号、同步域名
+- 管理域名（管理员可将平台域名分配给用户）
+- 创建与管理邮箱地址、转发规则
+- 收件箱查看（HTML 正文沙箱隔离）、撰写并发送邮件
+- 管理 API Key（原文仅创建时展示一次）、修改个人资料
+- 管理员后台：用户列表与详情
+
+> Tailwind 与 Alpine 通过 Play CDN 加载（运行时联网）；核心表单在无 JS / 无网络时仍可提交。
 
 ## 测试
 
@@ -61,6 +78,18 @@ pytest tests/
 ```
 
 每个测试用例使用独立的 SQLite 内存数据库，测试中所有 Cloudflare API 调用均为 Mock。
+
+### 端到端（e2e）测试
+
+前端关键路径用 **Playwright** 驱动真实浏览器测试，位于 `e2e/` 目录（默认 `pytest` 不收集）：
+
+```bash
+pip install pytest-playwright
+playwright install chromium   # 首次需下载浏览器
+pytest e2e/
+```
+
+e2e 通过 `CF_FAKE_MODE=1` 让 Cloudflare 调用返回内置假数据，可离线运行（无需真实 CF 账号）。
 
 ---
 

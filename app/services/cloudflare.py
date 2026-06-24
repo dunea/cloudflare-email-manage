@@ -91,6 +91,8 @@ class CloudflareClient:
 
     async def verify_token(self) -> dict[str, Any]:
         """校验 API Token 有效性（GET /user/tokens/verify）。"""
+        if settings.CF_FAKE_MODE:
+            return {"status": "active"}
         result = await self._request("GET", "/user/tokens/verify")
         return result if isinstance(result, dict) else {}
 
@@ -98,6 +100,10 @@ class CloudflareClient:
 
     async def list_zones(self, account_id: str) -> list[dict[str, Any]]:
         """列出指定账号下的所有 Zone（域名）。"""
+        if settings.CF_FAKE_MODE:
+            return [
+                {"id": "zone-e2e", "name": "e2e.example.com", "status": "active"}
+            ]
         result = await self._request(
             "GET",
             "/zones",
@@ -123,6 +129,8 @@ class CloudflareClient:
         self, zone_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """创建一条邮件转发规则。"""
+        if settings.CF_FAKE_MODE:
+            return {"id": "rule-e2e"}
         result = await self._request(
             "POST", f"/zones/{zone_id}/email/routing/rules", json=payload
         )
@@ -132,6 +140,8 @@ class CloudflareClient:
         self, zone_id: str, rule_id: str
     ) -> dict[str, Any]:
         """删除一条邮件转发规则。"""
+        if settings.CF_FAKE_MODE:
+            return {"id": rule_id}
         result = await self._request(
             "DELETE", f"/zones/{zone_id}/email/routing/rules/{rule_id}"
         )
@@ -168,6 +178,8 @@ class CloudflareClient:
 
         发送接口在成功时可能返回 202 且响应体非标准信封，故单独处理。
         """
+        if settings.CF_FAKE_MODE:
+            return {"id": "msg-e2e"}
         resp = await self._raw_request(
             "POST", f"/accounts/{account_id}/email/send", json=payload
         )

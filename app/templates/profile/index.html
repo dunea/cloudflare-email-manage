@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% from "components/macros.html" import badge %}
+{% block title %}个人资料 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-semibold text-slate-900">个人资料</h1>
+</div>
+
+<div class="grid gap-6 lg:grid-cols-2">
+  <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+    <h3 class="mb-4 font-semibold text-slate-800">账号信息</h3>
+    <dl class="space-y-3 text-sm">
+      <div class="flex justify-between gap-4"><dt class="text-slate-500">用户名</dt><dd class="text-slate-700">{{ current_user.username }}</dd></div>
+      <div class="flex justify-between gap-4"><dt class="text-slate-500">角色</dt><dd>{% if current_user.role == "admin" %}{{ badge("管理员", "indigo") }}{% else %}{{ badge("普通用户", "slate") }}{% endif %}</dd></div>
+      <div class="flex justify-between gap-4"><dt class="text-slate-500">注册时间</dt><dd class="text-slate-700">{{ current_user.created_at | dt }}</dd></div>
+    </dl>
+  </div>
+
+  <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+    <h3 class="mb-4 font-semibold text-slate-800">修改资料</h3>
+    <form method="post" action="/profile" class="space-y-4" x-data="{ show: false }">
+      <div>
+        <label class="mb-1 block text-sm font-medium text-slate-700">邮箱</label>
+        <input name="email" type="email" required value="{{ form.email | default(current_user.email) }}"
+               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+      </div>
+      <div>
+        <label class="mb-1 block text-sm font-medium text-slate-700">新密码（留空则不修改）</label>
+        <div class="relative">
+          <input name="password" :type="show ? 'text' : 'password'" minlength="8" maxlength="128"
+                 class="w-full rounded-lg border border-slate-300 px-3 py-2 pr-14 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+          <button type="button" tabindex="-1" @click="show = !show"
+                  class="absolute inset-y-0 right-0 px-3 text-xs text-slate-400 hover:text-slate-600"
+                  x-text="show ? '隐藏' : '显示'"></button>
+        </div>
+        <p class="mt-1 text-xs text-slate-400">至少 8 个字符</p>
+      </div>
+      <button type="submit" class="rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark">保存修改</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
