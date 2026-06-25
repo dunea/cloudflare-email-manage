@@ -2,6 +2,7 @@
 // 1) 复制到剪贴板；2) 全局 Toast 助手；3) 全局确认弹窗 Alpine store。
 
 // 复制文本到剪贴板（供 API Key 等一次性展示场景使用）。
+// 成功返回 true，失败返回 false（并已弹出失败提示，调用方无需重复提示）。
 window.copyToClipboard = async function (text, btn) {
   try {
     await navigator.clipboard.writeText(text);
@@ -12,8 +13,10 @@ window.copyToClipboard = async function (text, btn) {
         btn.textContent = original;
       }, 1500);
     }
+    return true;
   } catch (err) {
     window.toast("复制失败，请手动选择文本复制", "error");
+    return false;
   }
 };
 

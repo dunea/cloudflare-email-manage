@@ -205,8 +205,11 @@
       close() {
         this.open = false;
       },
-      copyOne(address, token, kind) {
-        window.copyToClipboard(this.single(address, token, kind));
+      async copyOne(address, token, kind) {
+        const ok = await window.copyToClipboard(this.single(address, token, kind));
+        if (ok) {
+          window.toast(kind === "txt" ? "已复制纯文本链接" : "已复制 HTML 链接", "success");
+        }
         this.close();
       },
       single(address, token, kind) {
@@ -240,8 +243,10 @@
         const action = this.action;
         this.close();
         if (action === "copy") {
-          await window.copyToClipboard(window.mailLink.all(kind));
-          window.toast("已复制 " + window.mailLink.count() + " 条链接", "success");
+          const ok = await window.copyToClipboard(window.mailLink.all(kind));
+          if (ok) {
+            window.toast("已复制 " + window.mailLink.count() + " 条链接", "success");
+          }
         } else {
           const content = window.mailLink.all(kind);
           const now = new Date();
