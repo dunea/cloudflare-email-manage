@@ -107,16 +107,14 @@ async def assign_domain(
     username: Annotated[str, Form()],
 ) -> Response:
     """将域名共享给用户（域名所有者可操作，按用户名精确查找目标用户）。"""
-    target = await user_service.get_user_by_username(session, username.strip())
-    if target is None:
-        flash(request, f"用户「{username.strip()}」不存在", "error")
-        return RedirectResponse(f"/domains/{domain_id}", status_code=303)
     try:
-        await domain_service.assign_domain(session, domain_id, target.id, user)
+        await domain_service.assign_domain_by_username(
+            session, domain_id, username.strip(), user
+        )
     except AppException as exc:
         flash(request, error_message(exc), "error")
         return RedirectResponse(f"/domains/{domain_id}", status_code=303)
-    flash(request, f"已共享域名给用户「{target.username}」", "success")
+    flash(request, f"已共享域名给用户「{username.strip()}」", "success")
     return RedirectResponse(f"/domains/{domain_id}", status_code=303)
 
 

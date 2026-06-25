@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.exceptions import AppException, NotFoundError, PermissionError
 from app.models import CFAccount, Domain, DomainAssignment, User
 from app.services.cf_account_service import build_client
+from app.services.user_service import get_user_by_username
 
 
 async def sync_domains(
@@ -137,17 +138,7 @@ async def assign_domain(
     owner: User,
 ) -> DomainAssignment:
     """将域名共享给指定用户（仅域名所有者可操作）。"""
-    domain = (
-        await session.execute(select(Domain).where(Domain.id == domain_id))
-    ).scalar_one_or_none()
-    if domain is None:
-        raise NotFoundError("域名不存在")
-
-    # 校验操作者为域名所有者
-    is_owner = await _is_domain_owner(session, owner, domain)
-    if not is_owner and owner.role != "admin":
-        raise PermissionError("仅域名所有者可共享域名")
-
+    await _get_assignable_domain(session, domain_id, owner)
     target = (
         await session.execute(
             select(User).where(
@@ -162,6 +153,48 @@ async def assign_domain(
     if target_user_id == owner.id:
         raise AppException("不能将域名共享给自己", code=1400)
 
+    return await _create_assignment(session, domain_id, target_user_id)
+
+
+async def assign_domain_by_username(
+    session: AsyncSession,
+    domain_id: int,
+    username: str,
+    owner: User,
+) -> DomainAssignment:
+    """按用户名共享域名（仅域名所有者可操作）。
+
+    先校验操作者权限，再查找目标用户，避免通过错误消息枚举用户是否存在。
+    """
+    await _get_assignable_domain(session, domain_id, owner)
+    target = await get_user_by_username(session, username)
+    if target is None:
+        raise NotFoundError("目标用户不存在")
+    if target.id == owner.id:
+        raise AppException("不能将域名共享给自己", code=1400)
+    return await _create_assignment(session, domain_id, target.id)
+
+
+async def _get_assignable_domain(
+    session: AsyncSession, domain_id: int, owner: User
+) -> Domain:
+    """查询域名并校验操作者是否有权共享，无权时抛 NotFound/Permission。"""
+    domain = (
+        await session.execute(select(Domain).where(Domain.id == domain_id))
+    ).scalar_one_or_none()
+    if domain is None:
+        raise NotFoundError("域名不存在")
+
+    is_owner = await _is_domain_owner(session, owner, domain)
+    if not is_owner and owner.role != "admin":
+        raise PermissionError("仅域名所有者可共享域名")
+    return domain
+
+
+async def _create_assignment(
+    session: AsyncSession, domain_id: int, target_user_id: int
+) -> DomainAssignment:
+    """创建共享记录，重复共享抛 409。"""
     assignment = DomainAssignment(domain_id=domain_id, user_id=target_user_id)
     session.add(assignment)
     try:

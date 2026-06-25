@@ -223,6 +223,18 @@ async def test_email_addresses_filter_empty_domain_id(
     assert resp.status_code == 200
 
 
+async def test_email_addresses_filter_invalid_domain_id(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """非正整数的 domain_id 被忽略，不触发 422，返回不过滤列表。"""
+    await _web_login(client)
+    user = await _get_user(db_session)
+    await _seed_domain(db_session, user.id, domain_name="mine.com")
+    for bad in ("0", "-1", "abc"):
+        resp = await client.get("/email-addresses", params={"domain_id": bad})
+        assert resp.status_code == 200
+
+
 async def test_domain_assignment_unknown_username(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -243,3 +255,27 @@ async def test_domain_assignment_unknown_username(
         await db_session.execute(select(DomainAssignment))
     ).scalars().all()
     assert rows == []
+
+
+async def test_non_owner_share_unknown_username_no_enumeration(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """非所有者共享时不暴露"用户不存在"，统一返回权限错误。"""
+    await _web_login(client)
+
+    await client.post(
+        "/register",
+        data={"username": "carol", "email": "carol@example.com", "password": "password123"},
+    )
+    carol = await _get_user(db_session, "carol")
+    domain = await _seed_domain(db_session, carol.id, domain_name="carol.com")
+
+    resp = await client.post(
+        f"/domains/{domain.id}/assignments",
+        data={"username": "no-such-user"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    detail = await client.get(f"/domains/{domain.id}")
+    assert "目标用户不存在" not in detail.text
+    assert "所有者" in detail.text
