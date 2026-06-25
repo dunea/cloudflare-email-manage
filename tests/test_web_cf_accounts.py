@@ -32,7 +32,24 @@ def _patch_verify_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _verify(self: CloudflareClient) -> dict[str, str]:
         return {"status": "active"}
 
+    async def _list_accounts(self: CloudflareClient) -> list[dict[str, str]]:
+        return [{"id": "acc-1", "name": "test-account"}]
+
+    async def _list_zones(
+        self: CloudflareClient, account_id: str | None = None
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "id": "zone-e2e",
+                "name": "e2e.example.com",
+                "status": "active",
+                "account": {"id": "acc-1", "name": "test-account"},
+            }
+        ]
+
     monkeypatch.setattr(CloudflareClient, "verify_token", _verify)
+    monkeypatch.setattr(CloudflareClient, "list_accounts", _list_accounts)
+    monkeypatch.setattr(CloudflareClient, "list_zones", _list_zones)
 
 
 def _patch_verify_fail(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,7 +62,9 @@ def _patch_verify_fail(monkeypatch: pytest.MonkeyPatch) -> None:
 def _patch_list_zones(
     monkeypatch: pytest.MonkeyPatch, zones: list[dict[str, str]]
 ) -> None:
-    async def _list(self: CloudflareClient, account_id: str) -> list[dict[str, str]]:
+    async def _list(
+        self: CloudflareClient, account_id: str | None = None
+    ) -> list[dict[str, str]]:
         return zones
 
     monkeypatch.setattr(CloudflareClient, "list_zones", _list)
@@ -57,8 +76,6 @@ async def _bind(
     name: str = "主账号",
     api_token: str = "tok",
     account_id: str = "acc-1",
-    permission_type: str = "all",
-    allowed_zone_ids: str = "",
 ) -> object:
     return await client.post(
         "/cf-accounts",
@@ -66,8 +83,6 @@ async def _bind(
             "name": name,
             "api_token": api_token,
             "account_id": account_id,
-            "permission_type": permission_type,
-            "allowed_zone_ids": allowed_zone_ids,
         },
         follow_redirects=False,
     )
@@ -154,8 +169,6 @@ async def test_edit_cf_account_renames(
         f"/cf-accounts/{account.id}/edit",
         data={
             "name": "新名称",
-            "permission_type": "all",
-            "allowed_zone_ids": "",
             "api_token": "",
             "is_active": "on",
         },

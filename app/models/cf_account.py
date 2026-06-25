@@ -25,12 +25,8 @@ class CFAccount(Base):
     name: Mapped[str] = mapped_column(String(128))
     # Fernet 加密后的 API Token
     encrypted_api_token: Mapped[str] = mapped_column(Text)
-    # CF 账号 ID（account_id）
+    # CF 账号 ID（account_id，绑定时自动获取）
     account_id: Mapped[str] = mapped_column(String(64))
-    # 权限类型：all（全部域名）/ specific（仅指定域名）
-    permission_type: Mapped[str] = mapped_column(String(16), default="all")
-    # 当 permission_type=specific 时，存放允许的 zone_id（逗号分隔）
-    allowed_zone_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(

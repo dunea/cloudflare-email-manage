@@ -60,7 +60,7 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> _CFCalls:
         return {"status": "active"}
 
     async def _fake_list_zones(
-        self: CloudflareClient, account_id: str
+        self: CloudflareClient, account_id: str | None = None
     ) -> list[dict[str, str]]:
         return ZONES
 
@@ -92,7 +92,6 @@ async def _bind(client: AsyncClient, token: str) -> int:
             "name": "主账号",
             "api_token": "cf-token",
             "account_id": "acc-123",
-            "permission_type": "all",
         },
     )
     return resp.json()["data"]["id"]

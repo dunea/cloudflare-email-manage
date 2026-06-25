@@ -8,40 +8,23 @@
 
 <div class="grid gap-6 lg:grid-cols-3">
   <form method="post" action="/cf-accounts"
-        class="space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2"
-        x-data="{ ptype: '{{ form.permission_type | default('all') }}' }">
+        class="space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
     <div>
       <label class="mb-1 block text-sm font-medium text-slate-700">名称</label>
       <input name="name" value="{{ form.name | default('') }}" required maxlength="128"
              class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
     </div>
     <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">Account ID</label>
-      <input name="account_id" value="{{ form.account_id | default('') }}" required maxlength="64"
+      <label class="mb-1 block text-sm font-medium text-slate-700">Account ID（可选）</label>
+      <input name="account_id" value="{{ form.account_id | default('') }}" maxlength="64"
              class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
-      <p class="mt-1 text-xs text-slate-400">在 Cloudflare 控制台域名 Overview 右下角可找到 Account ID</p>
+      <p class="mt-1 text-xs text-slate-400">留空时将自动从 CF API 获取；如需指定可填写</p>
     </div>
     <div>
       <label class="mb-1 block text-sm font-medium text-slate-700">API Token</label>
       <input name="api_token" type="password" required
              class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
       <p class="mt-1 text-xs text-slate-400">仅用于绑定校验，加密存储、绝不回显</p>
-    </div>
-    <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">权限范围</label>
-      <div class="flex gap-4 text-sm">
-        <label class="flex items-center gap-2">
-          <input type="radio" name="permission_type" value="all" x-model="ptype" /> 全部域名
-        </label>
-        <label class="flex items-center gap-2">
-          <input type="radio" name="permission_type" value="specific" x-model="ptype" /> 指定域名
-        </label>
-      </div>
-    </div>
-    <div x-show="ptype === 'specific'" x-cloak>
-      <label class="mb-1 block text-sm font-medium text-slate-700">允许的 Zone ID</label>
-      <textarea name="allowed_zone_ids" rows="3" placeholder="多个用逗号或换行分隔"
-                class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">{{ form.allowed_zone_ids | default('') }}</textarea>
     </div>
     <button type="submit"
             class="rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark">校验并绑定</button>

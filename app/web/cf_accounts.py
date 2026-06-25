@@ -27,12 +27,6 @@ TOKEN_PERMISSIONS = [
 ]
 
 
-def _parse_zone_ids(raw: str) -> list[str] | None:
-    """将逗号/换行分隔的 zone_id 文本解析为列表。"""
-    ids = [z.strip() for z in raw.replace("\n", ",").split(",") if z.strip()]
-    return ids or None
-
-
 @router.get("/cf-accounts")
 async def list_cf_accounts(
     request: Request,
@@ -66,7 +60,7 @@ async def new_cf_account(request: Request, user: CurrentWebUser) -> Response:
         user=user,
         active="cf_accounts",
         permissions=TOKEN_PERMISSIONS,
-        form={"permission_type": "all"},
+        form={},
     )
 
 
@@ -77,18 +71,14 @@ async def create_cf_account(
     session: SessionDep,
     name: Annotated[str, Form()],
     api_token: Annotated[str, Form()],
-    account_id: Annotated[str, Form()],
-    permission_type: Annotated[str, Form()] = "all",
-    allowed_zone_ids: Annotated[str, Form()] = "",
+    account_id: Annotated[str, Form()] = "",
 ) -> Response:
-    """处理绑定表单：校验 Token 后加密存储。"""
+    """处理绑定表单：校验 Token 后加密存储，自动获取 account_id。"""
     try:
         data = CFAccountCreate(
             name=name,
             api_token=api_token,
-            account_id=account_id,
-            permission_type=permission_type,
-            allowed_zone_ids=_parse_zone_ids(allowed_zone_ids),
+            account_id=account_id or None,
         )
         await cf_account_service.bind_cf_account(session, user, data)
     except (ValidationError, AppException) as exc:
@@ -103,8 +93,6 @@ async def create_cf_account(
             form={
                 "name": name,
                 "account_id": account_id,
-                "permission_type": permission_type,
-                "allowed_zone_ids": allowed_zone_ids,
             },
         )
     flash(request, "已成功绑定 CF 账号", "success")
@@ -141,12 +129,10 @@ async def edit_cf_account(
     session: SessionDep,
     account_id: int,
     name: Annotated[str, Form()],
-    permission_type: Annotated[str, Form()] = "all",
-    allowed_zone_ids: Annotated[str, Form()] = "",
     api_token: Annotated[str, Form()] = "",
     is_active: Annotated[str | None, Form()] = None,
 ) -> Response:
-    """更新 CF 账号（名称 / 权限 / Token / 启停）。"""
+    """更新 CF 账号（名称 / Token / 启停）。"""
     try:
         account = await cf_account_service.get_cf_account_or_404(
             session, account_id, user
@@ -158,8 +144,6 @@ async def edit_cf_account(
     try:
         update = CFAccountUpdate(
             name=name,
-            permission_type=permission_type,
-            allowed_zone_ids=_parse_zone_ids(allowed_zone_ids),
             api_token=api_token or None,
             is_active=is_active == "on",
         )

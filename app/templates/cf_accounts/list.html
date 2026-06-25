@@ -18,7 +18,6 @@
       <tr>
         <th class="px-4 py-3">名称</th>
         <th class="px-4 py-3">Account ID</th>
-        <th class="px-4 py-3">权限</th>
         <th class="px-4 py-3">状态</th>
         <th class="px-4 py-3">创建时间</th>
         <th class="px-4 py-3 text-right">操作</th>
@@ -31,7 +30,6 @@
           <a href="/cf-accounts/{{ a.id }}" class="font-medium text-slate-700 hover:text-brand">{{ a.name }}</a>
         </td>
         <td class="px-4 py-3 font-mono text-xs text-slate-500">{{ a.account_id }}</td>
-        <td class="px-4 py-3 text-slate-600">{{ "全部域名" if a.permission_type == "all" else "指定域名" }}</td>
         <td class="px-4 py-3">
           {% if a.is_active %}{{ badge("启用", "green") }}{% else %}{{ badge("停用", "slate") }}{% endif %}
         </td>

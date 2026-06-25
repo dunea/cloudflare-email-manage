@@ -46,7 +46,6 @@ async def _seed_email(
         name="acc",
         encrypted_api_token=encrypt_token("t"),
         account_id="acc-1",
-        permission_type="all",
     )
     db_session.add(cf)
     await db_session.commit()
@@ -55,7 +54,6 @@ async def _seed_email(
         cf_account_id=cf.id,
         zone_id="z1",
         domain_name=domain_name,
-        owner_type="user",
         status="active",
     )
     db_session.add(domain)

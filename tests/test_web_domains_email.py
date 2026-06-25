@@ -35,7 +35,6 @@ async def _seed_domain(
     user_id: int,
     *,
     domain_name: str = "example.com",
-    owner_type: str = "user",
     zone_id: str = "z1",
 ) -> Domain:
     """直接写库构造一个 CF 账号 + 域名。"""
@@ -44,7 +43,6 @@ async def _seed_domain(
         name="acc",
         encrypted_api_token=encrypt_token("t"),
         account_id="acc-1",
-        permission_type="all",
     )
     db_session.add(cf)
     await db_session.commit()
@@ -53,7 +51,6 @@ async def _seed_domain(
         cf_account_id=cf.id,
         zone_id=zone_id,
         domain_name=domain_name,
-        owner_type=owner_type,
         status="active",
     )
     db_session.add(domain)
@@ -101,11 +98,9 @@ async def test_domain_detail_not_found(client: AsyncClient) -> None:
 async def test_domain_assignment_flow(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """管理员将平台域名分配给用户，再取消分配。"""
+    """域名所有者共享域名给用户，再取消共享。"""
     await _web_login(client)
     alice = await _get_user(db_session)
-    alice.role = "admin"
-    await db_session.commit()
 
     await client.post(
         "/register",
@@ -113,7 +108,7 @@ async def test_domain_assignment_flow(
     )
     bob = await _get_user(db_session, "bob")
     domain = await _seed_domain(
-        db_session, alice.id, domain_name="platform.com", owner_type="platform"
+        db_session, alice.id, domain_name="mine.com"
     )
 
     resp = await client.post(
@@ -124,32 +119,40 @@ async def test_domain_assignment_flow(
     assert resp.status_code == 303
     detail = await client.get(f"/domains/{domain.id}")
     assert "bob" in detail.text
-    assert "已分配域名给该用户" in detail.text
+    assert "已共享域名给该用户" in detail.text
 
     resp = await client.post(
         f"/domains/{domain.id}/assignments/{bob.id}/delete", follow_redirects=False
     )
     assert resp.status_code == 303
     detail = await client.get(f"/domains/{domain.id}")
-    assert "已取消分配" in detail.text
+    assert "已取消共享" in detail.text
 
 
-async def test_domain_assignment_requires_admin(
+async def test_domain_assignment_non_owner_redirected(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """普通用户访问分配端点被重定向（非管理员）。"""
+    """非域名所有者共享域名被拒绝（flash 错误后重定向）。"""
     await _web_login(client)
     user = await _get_user(db_session)
-    domain = await _seed_domain(
-        db_session, user.id, domain_name="platform.com", owner_type="platform"
+
+    # 另一个用户绑定域名
+    await client.post(
+        "/register",
+        data={"username": "carol", "email": "carol@example.com", "password": "password123"},
     )
+    carol = await _get_user(db_session, "carol")
+    domain = await _seed_domain(db_session, carol.id, domain_name="carol.com")
+
+    # alice（非所有者）尝试共享
     resp = await client.post(
         f"/domains/{domain.id}/assignments",
-        data={"user_id": "1"},
+        data={"user_id": str(user.id)},
         follow_redirects=False,
     )
+    # 非所有者会 flash 错误并重定向到域名详情页
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/dashboard"
+    assert resp.headers["location"] == f"/domains/{domain.id}"
 
 
 # ---- 邮箱地址 ----
