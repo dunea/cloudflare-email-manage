@@ -7,7 +7,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import CFAccount, Domain, EmailAddress, User
+from app.models import CFAccount, Domain, DomainAssignment, EmailAddress, User
 from app.services.crypto import encrypt_token
 
 
@@ -113,13 +113,13 @@ async def test_domain_assignment_flow(
 
     resp = await client.post(
         f"/domains/{domain.id}/assignments",
-        data={"user_id": str(bob.id)},
+        data={"username": "bob"},
         follow_redirects=False,
     )
     assert resp.status_code == 303
     detail = await client.get(f"/domains/{domain.id}")
     assert "bob" in detail.text
-    assert "已共享域名给该用户" in detail.text
+    assert "已共享域名给用户" in detail.text
 
     resp = await client.post(
         f"/domains/{domain.id}/assignments/{bob.id}/delete", follow_redirects=False
@@ -134,7 +134,6 @@ async def test_domain_assignment_non_owner_redirected(
 ) -> None:
     """非域名所有者共享域名被拒绝（flash 错误后重定向）。"""
     await _web_login(client)
-    user = await _get_user(db_session)
 
     # 另一个用户绑定域名
     await client.post(
@@ -147,7 +146,7 @@ async def test_domain_assignment_non_owner_redirected(
     # alice（非所有者）尝试共享
     resp = await client.post(
         f"/domains/{domain.id}/assignments",
-        data={"user_id": str(user.id)},
+        data={"username": "alice"},
         follow_redirects=False,
     )
     # 非所有者会 flash 错误并重定向到域名详情页
@@ -211,3 +210,72 @@ async def test_email_addresses_requires_auth(client: AsyncClient) -> None:
     resp = await client.get("/email-addresses", follow_redirects=False)
     assert resp.status_code == 303
     assert resp.headers["location"].startswith("/login")
+
+
+async def test_email_addresses_filter_empty_domain_id(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """前端"全部域名"提交空 domain_id 时不应触发 422，正常返回列表。"""
+    await _web_login(client)
+    user = await _get_user(db_session)
+    await _seed_domain(db_session, user.id, domain_name="mine.com")
+    resp = await client.get("/email-addresses", params={"domain_id": ""})
+    assert resp.status_code == 200
+
+
+async def test_email_addresses_filter_invalid_domain_id(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """非正整数的 domain_id 被忽略，不触发 422，返回不过滤列表。"""
+    await _web_login(client)
+    user = await _get_user(db_session)
+    await _seed_domain(db_session, user.id, domain_name="mine.com")
+    for bad in ("0", "-1", "abc"):
+        resp = await client.get("/email-addresses", params={"domain_id": bad})
+        assert resp.status_code == 200
+
+
+async def test_domain_assignment_unknown_username(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """共享给不存在的用户名时 flash 错误并重定向，不落库。"""
+    await _web_login(client)
+    user = await _get_user(db_session)
+    domain = await _seed_domain(db_session, user.id, domain_name="mine.com")
+
+    resp = await client.post(
+        f"/domains/{domain.id}/assignments",
+        data={"username": "no-such-user"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    detail = await client.get(f"/domains/{domain.id}")
+    assert "不存在" in detail.text
+    rows = (
+        await db_session.execute(select(DomainAssignment))
+    ).scalars().all()
+    assert rows == []
+
+
+async def test_non_owner_share_unknown_username_no_enumeration(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """非所有者共享时不暴露"用户不存在"，统一返回权限错误。"""
+    await _web_login(client)
+
+    await client.post(
+        "/register",
+        data={"username": "carol", "email": "carol@example.com", "password": "password123"},
+    )
+    carol = await _get_user(db_session, "carol")
+    domain = await _seed_domain(db_session, carol.id, domain_name="carol.com")
+
+    resp = await client.post(
+        f"/domains/{domain.id}/assignments",
+        data={"username": "no-such-user"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    detail = await client.get(f"/domains/{domain.id}")
+    assert "目标用户不存在" not in detail.text
+    assert "所有者" in detail.text

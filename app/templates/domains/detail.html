@@ -45,13 +45,8 @@
   <form method="post" action="/domains/{{ domain.id }}/assignments" class="mb-5 flex flex-wrap items-end gap-3">
     <div>
       <label class="mb-1 block text-sm font-medium text-slate-700">共享给用户</label>
-      <select name="user_id" required
-              class="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
-        <option value="" disabled selected>选择用户…</option>
-        {% for u in assignable_users %}
-        <option value="{{ u.id }}">{{ u.username }}（{{ u.email }}）</option>
-        {% endfor %}
-      </select>
+      <input name="username" required placeholder="输入对方用户名" autocomplete="off"
+             class="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
     </div>
     <button type="submit" class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">共享</button>
   </form>

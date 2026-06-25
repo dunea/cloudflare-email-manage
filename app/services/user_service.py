@@ -25,6 +25,32 @@ async def get_user_or_404(session: AsyncSession, user_id: int) -> User:
     return user
 
 
+async def get_user_by_username(
+    session: AsyncSession, username: str
+) -> User | None:
+    """按用户名查询未删除的用户。"""
+    result = await session.execute(
+        select(User).where(
+            User.username == username, User.is_deleted.is_(False)
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_users_by_ids(
+    session: AsyncSession, user_ids: list[int]
+) -> list[User]:
+    """按 id 批量查询用户，返回按 id 升序排列的列表。"""
+    if not user_ids:
+        return []
+    result = await session.execute(
+        select(User)
+        .where(User.id.in_(user_ids), User.is_deleted.is_(False))
+        .order_by(User.id)
+    )
+    return list(result.scalars().all())
+
+
 async def list_users(
     session: AsyncSession, page: int, size: int
 ) -> tuple[list[User], int]:

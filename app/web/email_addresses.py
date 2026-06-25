@@ -31,11 +31,21 @@ async def list_email_addresses(
     session: SessionDep,
     page: int = Query(default=1, ge=1),
     size: int = Query(default=20, ge=1, le=100),
-    domain_id: int | None = Query(default=None, ge=1),
+    domain_id: str | None = Query(default=None),
 ) -> Response:
     """邮箱地址列表（可按域名过滤），并内置创建表单。"""
+    # 兼容前端"全部域名"提交的空字符串，空值视为不过滤；
+    # 非空值必须为 >= 1 的整数，否则忽略过滤
+    parsed_domain_id: int | None = None
+    if domain_id:
+        try:
+            value = int(domain_id)
+        except ValueError:
+            value = None
+        if value is not None and value >= 1:
+            parsed_domain_id = value
     addresses, total = await email_service.list_email_addresses(
-        session, user, page, size, domain_id
+        session, user, page, size, parsed_domain_id
     )
     domains, _ = await domain_service.list_domains_for_user(session, user, 1, 100)
     return render(
@@ -48,7 +58,7 @@ async def list_email_addresses(
         page=page,
         size=size,
         total=total,
-        domain_id=domain_id,
+        domain_id=parsed_domain_id,
     )
 
 
