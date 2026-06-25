@@ -68,11 +68,12 @@ async def domain_detail(
     )
 
     assignments: list[dict[str, object]] = []
-    assignable_users: list[object] = []
     if can_assign:
         rows = await domain_service.list_domain_assignments(session, domain_id)
-        users, _ = await user_service.list_users(session, 1, 200)
-        user_map = {u.id: u for u in users}
+        assigned_users = await user_service.get_users_by_ids(
+            session, [r.user_id for r in rows]
+        )
+        user_map = {u.id: u for u in assigned_users}
         assignments = [
             {
                 "user_id": r.user_id,
@@ -84,10 +85,6 @@ async def domain_detail(
             }
             for r in rows
         ]
-        assigned_ids = {r.user_id for r in rows}
-        assignable_users = [
-            u for u in users if u.id != user.id and u.id not in assigned_ids
-        ]
 
     return render(
         request,
@@ -98,7 +95,6 @@ async def domain_detail(
         addresses=[EmailAddressRead.model_validate(a) for a in addresses],
         can_assign=can_assign,
         assignments=assignments,
-        assignable_users=assignable_users,
     )
 
 
@@ -108,15 +104,19 @@ async def assign_domain(
     user: CurrentWebUser,
     session: SessionDep,
     domain_id: int,
-    target_user_id: Annotated[int, Form(alias="user_id")],
+    username: Annotated[str, Form()],
 ) -> Response:
-    """将域名共享给用户（域名所有者可操作）。"""
+    """将域名共享给用户（域名所有者可操作，按用户名精确查找目标用户）。"""
+    target = await user_service.get_user_by_username(session, username.strip())
+    if target is None:
+        flash(request, f"用户「{username.strip()}」不存在", "error")
+        return RedirectResponse(f"/domains/{domain_id}", status_code=303)
     try:
-        await domain_service.assign_domain(session, domain_id, target_user_id, user)
+        await domain_service.assign_domain(session, domain_id, target.id, user)
     except AppException as exc:
         flash(request, error_message(exc), "error")
         return RedirectResponse(f"/domains/{domain_id}", status_code=303)
-    flash(request, "已共享域名给该用户", "success")
+    flash(request, f"已共享域名给用户「{target.username}」", "success")
     return RedirectResponse(f"/domains/{domain_id}", status_code=303)
 
 
