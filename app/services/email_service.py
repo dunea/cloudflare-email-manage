@@ -26,11 +26,15 @@ async def create_email_address(
     """创建邮箱地址：校验域名可访问后拼接 full_address 并入库。"""
     # 校验域名存在且当前用户可访问（自有或被分配）
     domain = await domain_service.get_domain_or_404(session, data.domain_id, user)
-    full_address = f"{data.local_part}@{domain.domain_name}"
+    # 邮箱地址统一小写存储（邮件协议域名不区分大小写，多数实现 local-part 也不区分）
+    local_part = data.local_part.lower()
+    full_address = f"{local_part}@{domain.domain_name.lower()}"
 
     existing = (
         await session.execute(
-            select(EmailAddress).where(EmailAddress.full_address == full_address)
+            select(EmailAddress).where(
+                func.lower(EmailAddress.full_address) == full_address
+            )
         )
     ).scalar_one_or_none()
     if existing is not None:
@@ -41,7 +45,7 @@ async def create_email_address(
         existing.is_active = True
         existing.user_id = user.id
         existing.domain_id = domain.id
-        existing.local_part = data.local_part
+        existing.local_part = local_part
         # 复活时若缺少公开令牌则补一个
         if not existing.public_token:
             existing.public_token = _new_public_token()
@@ -52,7 +56,7 @@ async def create_email_address(
     email_address = EmailAddress(
         domain_id=domain.id,
         user_id=user.id,
-        local_part=data.local_part,
+        local_part=local_part,
         full_address=full_address,
         public_token=_new_public_token(),
     )

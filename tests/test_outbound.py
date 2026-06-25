@@ -266,3 +266,25 @@ async def test_send_with_invalid_api_key(
         },
     )
     assert resp.status_code == 401
+
+
+async def test_send_case_insensitive_from_address(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """发件地址大小写不敏感：Hello@example.com 匹配 hello@example.com。"""
+    calls = _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    await _setup_email_address(client, token)
+
+    resp = await client.post(
+        "/api/v1/outbound/send",
+        headers=_auth(token),
+        json={
+            "from_address": "Hello@example.com",
+            "to": ["dest@other.com"],
+            "subject": "Hi",
+            "text": "x",
+        },
+    )
+    assert resp.status_code == 200
+    assert len(calls.sent) == 1

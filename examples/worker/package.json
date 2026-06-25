@@ -1,0 +1,17 @@
+{
+  "name": "cf-email-manager-webhook",
+  "version": "1.0.0",
+  "description": "Cloudflare Email Worker — 将收到的邮件转发到 CF Email Manager 平台 Webhook",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "dependencies": {
+    "postal-mime": "^2.4.1"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

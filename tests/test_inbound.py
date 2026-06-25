@@ -240,3 +240,45 @@ async def test_list_requires_auth(client: AsyncClient) -> None:
     """未认证查询收件列表返回 401。"""
     resp = await client.get("/api/v1/inbound")
     assert resp.status_code == 401
+
+
+# ---- 大小写不敏感匹配 ----
+
+
+async def test_webhook_normalizes_to_address_case(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Webhook 传入混合大小写 to 地址，入库后统一为小写，归属匹配正常。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    await _setup_email_address(client, token)
+
+    # 创建的邮箱为 hello@example.com，Webhook 传入 Hello@example.com
+    resp = await _post_webhook(
+        client,
+        {
+            "to": "Hello@example.com",
+            "from": "Sender@External.com",
+            "subject": "大小写测试",
+            "text": "正文",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    # 入库后地址应统一为小写
+    assert data["to_address"] == "hello@example.com"
+    assert data["from_address"] == "sender@external.com"
+
+    # 归属查询应能匹配到这封邮件
+    listing = await client.get("/api/v1/inbound", headers=_auth(token))
+    assert listing.status_code == 200
+    assert listing.json()["data"]["total"] == 1
+
+    # 大小写不敏感的 to_address 过滤也应匹配
+    filtered = await client.get(
+        "/api/v1/inbound",
+        headers=_auth(token),
+        params={"to_address": "HELLO@example.com"},
+    )
+    assert filtered.status_code == 200
+    assert filtered.json()["data"]["total"] == 1

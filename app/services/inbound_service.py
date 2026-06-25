@@ -50,8 +50,8 @@ async def process_webhook(
         ) from exc
 
     email = InboundEmail(
-        to_address=str(payload.to_address),
-        from_address=str(payload.from_address),
+        to_address=str(payload.to_address).lower(),
+        from_address=str(payload.from_address).lower(),
         subject=payload.subject,
         body_text=payload.body_text,
         body_html=payload.body_html,
@@ -67,11 +67,11 @@ def _accessible_stmt(user: User) -> Select[tuple[InboundEmail]]:
     stmt = select(InboundEmail)
     if user.role != "admin":
         owned = (
-            select(EmailAddress.full_address)
+            select(func.lower(EmailAddress.full_address))
             .where(EmailAddress.user_id == user.id)
             .scalar_subquery()
         )
-        stmt = stmt.where(InboundEmail.to_address.in_(owned))
+        stmt = stmt.where(func.lower(InboundEmail.to_address).in_(owned))
     return stmt
 
 
@@ -96,7 +96,7 @@ async def list_inbound_emails(
     """分页查询收到的邮件；按归属隔离，可按 to_address 过滤。"""
     base = _accessible_stmt(user)
     if to_address is not None:
-        base = base.where(InboundEmail.to_address == to_address)
+        base = base.where(func.lower(InboundEmail.to_address) == to_address.lower())
 
     total = (
         await session.execute(select(func.count()).select_from(base.subquery()))
@@ -110,10 +110,14 @@ async def list_inbound_emails(
 async def get_latest_inbound_by_address(
     session: AsyncSession, full_address: str
 ) -> InboundEmail | None:
-    """按收件地址取最新一封邮件（按 received_at / id 倒序）。"""
+    """按收件地址取最新一封邮件（按 received_at / id 倒序）。
+
+    地址比较大小写不敏感（邮件协议中域名部分不区分大小写，
+    多数实现 local-part 也不区分）。
+    """
     stmt = (
         select(InboundEmail)
-        .where(InboundEmail.to_address == full_address)
+        .where(func.lower(InboundEmail.to_address) == full_address.lower())
         .order_by(InboundEmail.received_at.desc(), InboundEmail.id.desc())
         .limit(1)
     )

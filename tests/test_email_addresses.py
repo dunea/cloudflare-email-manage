@@ -440,3 +440,46 @@ async def test_recreate_after_delete(
     )
     assert recreated.status_code == 201
     assert recreated.json()["data"]["full_address"] == "hello@example.com"
+
+
+# ---- 大小写规范化 ----
+
+
+async def test_create_normalizes_uppercase_local_part(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """创建时 local_part 含大写字母，入库后统一为小写。"""
+    token = await _register_and_login(client)
+    domain_id = await _setup_domain(client, token, monkeypatch)
+
+    resp = await client.post(
+        "/api/v1/email-addresses",
+        headers=_auth(token),
+        json={"domain_id": domain_id, "local_part": "Hello"},
+    )
+    assert resp.status_code == 201
+    data = resp.json()["data"]
+    assert data["local_part"] == "hello"
+    assert data["full_address"] == "hello@example.com"
+
+
+async def test_create_duplicate_case_insensitive(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """大写 local_part 与已存在的小写地址视为重复（409）。"""
+    token = await _register_and_login(client)
+    domain_id = await _setup_domain(client, token, monkeypatch)
+
+    first = await client.post(
+        "/api/v1/email-addresses",
+        headers=_auth(token),
+        json={"domain_id": domain_id, "local_part": "hello"},
+    )
+    assert first.status_code == 201
+
+    second = await client.post(
+        "/api/v1/email-addresses",
+        headers=_auth(token),
+        json={"domain_id": domain_id, "local_part": "HELLO"},
+    )
+    assert second.status_code == 409

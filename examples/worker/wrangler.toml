@@ -1,0 +1,23 @@
+#:schema node_modules/wrangler/config-schema.json
+
+name = "cf-email-manager-webhook"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ── 环境变量（非敏感，可提交到仓库）──────────────────────────────
+# 平台 Webhook 端点地址，结尾不要带斜杠
+# 本地开发：http://localhost:8000/api/v1/inbound/webhook
+# 生产环境：https://your-domain.com/api/v1/inbound/webhook
+[vars]
+WEBHOOK_URL = "http://localhost:8000/api/v1/inbound/webhook"
+
+# ── 敏感变量（用 wrangler secret put 设置，不要写在这里）─────────
+# CF_WEBHOOK_SECRET：与平台 .env 中的 CF_WEBHOOK_SECRET 保持完全一致
+# 设置命令：
+#   npx wrangler secret put CF_WEBHOOK_SECRET
+
+# ── Email Routing 触发器 ─────────────────────────────────────────
+# 无需在此声明 binding；Email Routing 的路由规则在 CF Dashboard 中配置，
+# 将收件地址指向本 Worker 即可。
+# 配置路径：Dashboard > 你的域名 > Email > Email Routing > Routing Rules
