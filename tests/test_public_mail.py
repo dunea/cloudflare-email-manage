@@ -222,3 +222,29 @@ async def test_reset_token_invalidates_old(
     # 新令牌可用（无邮件，200 提示）
     new = await client.get(f"/mail/{new_token}.txt")
     assert new.status_code == 200
+
+
+# ---- 大小写不敏感匹配 ----
+
+
+async def test_public_mail_matches_case_insensitive(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Webhook 传入大写 to 地址，公开查询仍能匹配到邮件。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    public_token = await _setup(client, token)
+    # 创建的邮箱为 hello@example.com，Webhook 传入 HELLO@example.com
+    await _post_webhook(
+        client,
+        {
+            "to": "HELLO@example.com",
+            "from": "sender@external.com",
+            "subject": "大小写测试",
+            "text": "正文内容",
+        },
+    )
+    resp = await client.get(f"/mail/{public_token}.txt")
+    assert resp.status_code == 200
+    assert "主题: 大小写测试" in resp.text
+    assert "正文内容" in resp.text

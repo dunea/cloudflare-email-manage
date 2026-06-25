@@ -7,7 +7,7 @@ CF Email Sending（Beta）。日发送配额 1000 封（免费）。
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.exceptions import NotFoundError
@@ -21,7 +21,7 @@ async def _resolve_sender(
 ) -> CFAccount:
     """校验发件地址归属当前用户，并解析其所属 CF 账号。"""
     stmt = select(EmailAddress).where(
-        EmailAddress.full_address == from_address,
+        func.lower(EmailAddress.full_address) == from_address.lower(),
         EmailAddress.is_deleted.is_(False),
         EmailAddress.is_active.is_(True),
     )
