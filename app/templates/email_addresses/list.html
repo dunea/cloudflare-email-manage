@@ -128,24 +128,24 @@
 ]</script>
 
 <!-- 批量操作选择弹窗 -->
-<div x-data x-cloak x-show="linkDialog.open"
+<div x-data x-cloak x-show="$store.linkDialog.visible"
      class="fixed inset-0 z-[85] flex items-center justify-center p-4"
-     @keydown.escape.window="linkDialog.close()">
-  <div class="absolute inset-0 bg-slate-900/50" @click="linkDialog.close()"></div>
-  <div x-show="linkDialog.open" x-transition
+     @keydown.escape.window="$store.linkDialog.close()">
+  <div class="absolute inset-0 bg-slate-900/50" @click="$store.linkDialog.close()"></div>
+  <div x-show="$store.linkDialog.visible" x-transition
        class="relative w-full max-w-sm rounded-xl bg-white p-6 shadow-xl">
     <h3 class="text-base font-semibold text-slate-900">选择链接格式</h3>
-    <p class="mt-2 text-sm text-slate-600" x-text="linkDialog.actionText"></p>
+    <p class="mt-2 text-sm text-slate-600" x-text="$store.linkDialog.actionText"></p>
     <div class="mt-5 flex flex-col gap-3">
-      <button type="button" @click="linkDialog.confirm('txt')"
+      <button type="button" @click="$store.linkDialog.confirm('txt')"
               class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">
         纯文本查询链接（.txt）
       </button>
-      <button type="button" @click="linkDialog.confirm('html')"
+      <button type="button" @click="$store.linkDialog.confirm('html')"
               class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">
         HTML 页面查询链接
       </button>
-      <button type="button" @click="linkDialog.close()"
+      <button type="button" @click="$store.linkDialog.close()"
               class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
         取消
       </button>
@@ -222,23 +222,23 @@
     // 批量操作组件：仅负责打开格式选择弹窗
     Alpine.data("batchLinks", () => ({
       openDialog(action) {
-        window.linkDialog.open(action);
+        Alpine.store("linkDialog").show(action);
       },
     }));
 
     // 全局单例：批量格式选择弹窗状态与回调
-    window.linkDialog = {
-      open: false,
+    Alpine.store("linkDialog", {
+      visible: false,
       action: null, // 'copy' | 'download'
       actionText: "",
-      open(action) {
+      show(action) {
         this.action = action;
         this.actionText =
           action === "copy" ? "复制全部链接到剪贴板" : "下载为 txt 文件";
-        this.open = true;
+        this.visible = true;
       },
       close() {
-        this.open = false;
+        this.visible = false;
         this.action = null;
       },
       async confirm(kind) {
@@ -269,7 +269,7 @@
           window.toast("已下载 " + filename, "success");
         }
       },
-    };
+    });
   });
 </script>
 {% else %}
