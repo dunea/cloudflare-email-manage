@@ -7,6 +7,7 @@ from app.routers import (
     api_keys,
     auth,
     cf_accounts,
+    destination_addresses,
     domains,
     email_addresses,
     forwarding_rules,
@@ -22,6 +23,7 @@ api_router.include_router(users.router)
 api_router.include_router(cf_accounts.router)
 api_router.include_router(domains.router)
 api_router.include_router(email_addresses.router)
+api_router.include_router(destination_addresses.router)
 api_router.include_router(forwarding_rules.router)
 api_router.include_router(inbound.router)
 api_router.include_router(outbound.router)

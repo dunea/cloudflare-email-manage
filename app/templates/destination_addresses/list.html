@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% from "components/macros.html" import badge, empty_state, pagination %}
+{% block title %}目标地址 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-semibold text-slate-900">目标地址</h1>
+  <p class="mt-1 text-sm text-slate-500">转发目标邮箱（Cloudflare Email Routing 目标地址），添加后需在邮箱中完成验证才能用于转发</p>
+</div>
+
+{% if accounts %}
+<form method="post" action="/destination-addresses"
+      class="mb-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+  <div class="min-w-[200px] flex-1">
+    <label class="mb-1 block text-sm font-medium text-slate-700">所属 CF 账号</label>
+    <select name="cf_account_id" required
+            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+      {% for a in accounts %}
+      <option value="{{ a.id }}">{{ a.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="min-w-[200px] flex-1">
+    <label class="mb-1 block text-sm font-medium text-slate-700">目标邮箱</label>
+    <input name="email" type="email" required placeholder="dest@example.com"
+           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+  </div>
+  <button type="submit" class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">添加</button>
+</form>
+
+<form method="post" action="/destination-addresses/sync" class="mb-4 flex items-center gap-3">
+  <label class="text-sm text-slate-600">同步账号</label>
+  <select name="cf_account_id"
+          class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+    {% for a in accounts %}
+    <option value="{{ a.id }}" {% if cf_account_id == a.id %}selected{% endif %}>{{ a.name }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit" class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50">同步验证状态</button>
+</form>
+{% else %}
+<div class="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+  还没有 CF 账号，请先在「CF 账号」绑定后再添加目标地址。
+</div>
+{% endif %}
+
+{% if addresses %}
+<div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+  <table class="w-full text-sm">
+    <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
+      <tr>
+        <th class="px-4 py-3">目标邮箱</th>
+        <th class="px-4 py-3">所属账号</th>
+        <th class="px-4 py-3">验证状态</th>
+        <th class="px-4 py-3">验证时间</th>
+        <th class="px-4 py-3 text-right">操作</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100">
+      {% for a in addresses %}
+      <tr class="hover:bg-slate-50">
+        <td class="px-4 py-3 font-mono text-slate-700">{{ a.email }}</td>
+        <td class="px-4 py-3 text-slate-600">{{ account_map.get(a.cf_account_id, "账号#" ~ a.cf_account_id) }}</td>
+        <td class="px-4 py-3">{% if a.verified %}{{ badge("已验证", "green") }}{% else %}{{ badge("待验证", "amber") }}{% endif %}</td>
+        <td class="px-4 py-3 text-slate-500">{{ a.verified_at | dt if a.verified_at else "—" }}</td>
+        <td class="px-4 py-3">
+          <div class="flex items-center justify-end gap-3">
+            <form method="post" action="/destination-addresses/{{ a.id }}/delete"
+                  x-data @submit.prevent="$store.confirm.ask($el, '确定删除该目标地址？引用它的转发规则会被停用。')">
+              <button type="submit" class="text-sm font-medium text-red-600 hover:underline">删除</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{{ pagination(page, size, total, "/destination-addresses") }}
+{% else %}
+{{ empty_state("还没有目标地址。添加后 Cloudflare 会发送验证邮件，验证完成即可用于转发规则。") }}
+{% endif %}
+{% endblock %}

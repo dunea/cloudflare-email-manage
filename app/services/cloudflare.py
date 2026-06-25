@@ -178,20 +178,56 @@ class CloudflareClient:
     async def list_destination_addresses(
         self, account_id: str
     ) -> list[dict[str, Any]]:
-        """列出账号下的转发目标地址。"""
+        """列出账号下的转发目标地址。
+
+        返回项含 ``id`` / ``email`` / ``verified``（verified 为 ISO 时间字符串或 None）。
+        """
+        if settings.CF_FAKE_MODE:
+            return []
         result = await self._request(
             "GET", f"/accounts/{account_id}/email/routing/addresses"
         )
         return result if isinstance(result, list) else []
 
+    async def get_destination_address(
+        self, account_id: str, address_id: str
+    ) -> dict[str, Any]:
+        """获取单个转发目标地址（含 verified 字段）。"""
+        result = await self._request(
+            "GET",
+            f"/accounts/{account_id}/email/routing/addresses/{address_id}",
+        )
+        return result if isinstance(result, dict) else {}
+
     async def create_destination_address(
         self, account_id: str, email: str
     ) -> dict[str, Any]:
-        """创建一个转发目标地址（需被验证后才可用）。"""
+        """创建一个转发目标地址（需被验证后才可用）。
+
+        CF 会向该邮箱发送验证邮件，返回结果含 ``id`` / ``email`` / ``verified``
+        （verified 创建时为 None，表示待验证）。
+        """
+        if settings.CF_FAKE_MODE:
+            return {"id": "dest-e2e", "email": email, "verified": None}
         result = await self._request(
             "POST",
             f"/accounts/{account_id}/email/routing/addresses",
             json={"email": email},
+        )
+        return result if isinstance(result, dict) else {}
+
+    async def delete_destination_address(
+        self, account_id: str, address_id: str
+    ) -> dict[str, Any]:
+        """删除一个转发目标地址。
+
+        删除后 CF 会自动停用引用该地址的路由规则。
+        """
+        if settings.CF_FAKE_MODE:
+            return {"id": address_id}
+        result = await self._request(
+            "DELETE",
+            f"/accounts/{account_id}/email/routing/addresses/{address_id}",
         )
         return result if isinstance(result, dict) else {}
 

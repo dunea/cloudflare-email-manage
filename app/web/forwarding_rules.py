@@ -1,6 +1,8 @@
 """转发规则页面路由：列表、创建、启用/停用、删除。
 
 复用 app/services/forwarding_service（创建/删除会同步到 CF Email Routing）。
+创建表单中：源邮箱仅显示未绑定转发规则的地址；目标邮箱从已验证的目标地址
+中选取，并按源邮箱所属 CF 账号联动过滤。
 """
 
 from typing import Annotated
@@ -8,16 +10,19 @@ from typing import Annotated
 from fastapi import APIRouter, Form, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import ValidationError
+from sqlalchemy import select
 
 from app.dependencies import SessionDep
 from app.exceptions import AppException, NotFoundError
+from app.models import Domain, ForwardingRule
+from app.schemas.destination_address import DestinationAddressRead
 from app.schemas.email_address import EmailAddressRead
 from app.schemas.forwarding_rule import (
     ForwardingRuleCreate,
     ForwardingRuleRead,
     ForwardingRuleUpdate,
 )
-from app.services import email_service, forwarding_service
+from app.services import destination_service, email_service, forwarding_service
 from app.web.deps import CurrentWebUser
 from app.web.templating import error_message, flash, render
 
@@ -27,9 +32,52 @@ router = APIRouter(tags=["前端-转发规则"])
 async def _email_options(
     session: SessionDep, user: CurrentWebUser
 ) -> list[EmailAddressRead]:
-    """当前用户的邮箱地址（作为转发源选项）。"""
+    """当前用户可用作转发源的邮箱地址（排除已有未删除转发规则的地址）。
+
+    同一源邮箱不能同时绑定两个转发目标，故已绑定的地址不再出现在选项中。
+    """
     addresses, _ = await email_service.list_email_addresses(session, user, 1, 200)
-    return [EmailAddressRead.model_validate(a) for a in addresses]
+    bound_ids = set(
+        (
+            await session.execute(
+                select(ForwardingRule.email_address_id).where(
+                    ForwardingRule.is_deleted.is_(False)
+                )
+            )
+        ).scalars().all()
+    )
+    return [
+        EmailAddressRead.model_validate(a)
+        for a in addresses
+        if a.id not in bound_ids
+    ]
+
+
+async def _email_account_map(
+    session: SessionDep, options: list[EmailAddressRead]
+) -> dict[int, int]:
+    """邮箱地址 id → 所属 CF 账号 id 映射，用于前端目标地址联动过滤。"""
+    if not options:
+        return {}
+    rows = (
+        await session.execute(
+            select(Domain.id, Domain.cf_account_id).where(
+                Domain.id.in_([o.domain_id for o in options])
+            )
+        )
+    ).all()
+    domain_account = {row[0]: row[1] for row in rows}
+    return {o.id: domain_account.get(o.domain_id, 0) for o in options}
+
+
+async def _verified_dest_options(
+    session: SessionDep, user: CurrentWebUser
+) -> list[DestinationAddressRead]:
+    """当前用户已验证的目标地址（作为转发目标选项）。"""
+    addresses, _ = await destination_service.list_destination_addresses(
+        session, user, 1, 200, verified=True
+    )
+    return [DestinationAddressRead.model_validate(a) for a in addresses]
 
 
 @router.get("/forwarding-rules")
@@ -46,14 +94,35 @@ async def list_forwarding_rules(
         session, user, page, size, email_address_id
     )
     options = await _email_options(session, user)
+    dest_options = await _verified_dest_options(session, user)
+    email_account = await _email_account_map(session, options)
+    # email_map 基于全部邮箱地址构造，确保表格中已绑定的源邮箱也能显示完整地址
+    all_addresses, _ = await email_service.list_email_addresses(
+        session, user, 1, 200
+    )
+    all_email_map = {
+        a.id: a.full_address for a in all_addresses
+    }
+    # 目标地址按 CF 账号分组，供前端联动过滤。
+    # 键统一转为字符串以兼容 JSON（Jinja tojson 会将 int 键转为字符串），
+    # 值转为 plain dict 列表以避免 Pydantic 模型序列化问题。
+    dests_by_account: dict[str, list[dict[str, str]]] = {}
+    for d in dest_options:
+        dests_by_account.setdefault(str(d.cf_account_id), []).append(
+            {"email": d.email}
+        )
+    email_account_json = {str(k): str(v) for k, v in email_account.items()}
     return render(
         request,
         "forwarding_rules/list.html",
         user=user,
         active="forwarding_rules",
         rules=[ForwardingRuleRead.model_validate(r) for r in rules],
-        email_map={o.id: o.full_address for o in options},
+        email_map=all_email_map,
         options=options,
+        email_account=email_account_json,
+        dest_options=dest_options,
+        dests_by_account=dests_by_account,
         page=page,
         size=size,
         total=total,

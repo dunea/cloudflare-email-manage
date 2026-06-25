@@ -50,6 +50,8 @@ class _CFCalls:
     def __init__(self) -> None:
         self.created: list[tuple[str, dict[str, Any]]] = []
         self.deleted: list[tuple[str, str]] = []
+        # CF 侧目标地址列表（可被测试覆写为已验证状态）
+        self.dest_items: list[dict[str, Any]] = []
 
 
 def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> _CFCalls:
@@ -76,10 +78,26 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> _CFCalls:
         calls.deleted.append((zone_id, rule_id))
         return {"id": rule_id}
 
+    async def _fake_list_dests(
+        self: CloudflareClient, account_id: str
+    ) -> list[dict[str, Any]]:
+        return calls.dest_items
+
+    async def _fake_create_dest(
+        self: CloudflareClient, account_id: str, email: str
+    ) -> dict[str, Any]:
+        return {"id": f"cf-dest-{email}", "email": email, "verified": None}
+
     monkeypatch.setattr(CloudflareClient, "verify_token", _fake_verify)
     monkeypatch.setattr(CloudflareClient, "list_zones", _fake_list_zones)
     monkeypatch.setattr(CloudflareClient, "create_routing_rule", _fake_create_rule)
     monkeypatch.setattr(CloudflareClient, "delete_routing_rule", _fake_delete_rule)
+    monkeypatch.setattr(
+        CloudflareClient, "list_destination_addresses", _fake_list_dests
+    )
+    monkeypatch.setattr(
+        CloudflareClient, "create_destination_address", _fake_create_dest
+    )
     return calls
 
 
@@ -115,6 +133,17 @@ async def _setup_email_address(client: AsyncClient, token: str) -> int:
     return created.json()["data"]["id"]
 
 
+def _mark_dest_verified(calls: _CFCalls, email: str) -> None:
+    """将 CF 侧目标地址标记为已验证，供 ensure_verified 校验通过。"""
+    calls.dest_items = [
+        {
+            "id": f"cf-dest-{email.lower()}",
+            "email": email.lower(),
+            "verified": "2026-06-26T08:00:00Z",
+        }
+    ]
+
+
 # ---- 创建 ----
 
 
@@ -125,6 +154,7 @@ async def test_create_forwarding_rule(
     calls = _patch_cf(monkeypatch)
     token = await _register_and_login(client)
     ea_id = await _setup_email_address(client, token)
+    _mark_dest_verified(calls, "dest@other.com")
 
     resp = await client.post(
         "/api/v1/forwarding-rules",
@@ -189,35 +219,104 @@ async def test_create_on_inaccessible_email_address(
     assert resp.status_code == 404
 
 
+async def test_create_duplicate_source_binding(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同一源邮箱已有未删除转发规则时，再次绑定返回 409。"""
+    calls = _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    ea_id = await _setup_email_address(client, token)
+    _mark_dest_verified(calls, "a@x.com")
+
+    first = await client.post(
+        "/api/v1/forwarding-rules",
+        headers=_auth(token),
+        json={"email_address_id": ea_id, "destination_email": "a@x.com"},
+    )
+    assert first.status_code == 201
+
+    _mark_dest_verified(calls, "b@x.com")
+    second = await client.post(
+        "/api/v1/forwarding-rules",
+        headers=_auth(token),
+        json={"email_address_id": ea_id, "destination_email": "b@x.com"},
+    )
+    assert second.status_code == 409
+    assert "已绑定" in second.json()["message"]
+
+
+async def test_create_unverified_destination_rejected(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """目标邮箱未在 CF 完成验证时，创建转发规则被拦截。"""
+    calls = _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    ea_id = await _setup_email_address(client, token)
+    # CF 侧目标地址为待验证状态
+    calls.dest_items = [
+        {"id": "cf-dest-dest@other.com", "email": "dest@other.com", "verified": None}
+    ]
+
+    resp = await client.post(
+        "/api/v1/forwarding-rules",
+        headers=_auth(token),
+        json={"email_address_id": ea_id, "destination_email": "dest@other.com"},
+    )
+    assert resp.status_code == 409
+    assert "未验证" in resp.json()["message"]
+    # 不应调用 CF 创建规则
+    assert len(calls.created) == 0
+
+
+async def test_create_unknown_destination_rejected(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """目标邮箱未添加为目标地址时，创建转发规则被拦截。"""
+    calls = _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    ea_id = await _setup_email_address(client, token)
+    # CF 侧无任何目标地址
+    calls.dest_items = []
+
+    resp = await client.post(
+        "/api/v1/forwarding-rules",
+        headers=_auth(token),
+        json={"email_address_id": ea_id, "destination_email": "dest@other.com"},
+    )
+    assert resp.status_code == 409
+    assert len(calls.created) == 0
+
+
 # ---- 列表 / 详情 / 隔离 ----
 
 
 async def test_list_forwarding_rules(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """分页列出当前用户的转发规则。"""
-    _patch_cf(monkeypatch)
+    """分页列出当前用户的转发规则（同一源邮箱仅能绑一条）。"""
+    calls = _patch_cf(monkeypatch)
     token = await _register_and_login(client)
     ea_id = await _setup_email_address(client, token)
-    for dest in ("a@x.com", "b@x.com"):
-        await client.post(
-            "/api/v1/forwarding-rules",
-            headers=_auth(token),
-            json={"email_address_id": ea_id, "destination_email": dest},
-        )
+    _mark_dest_verified(calls, "a@x.com")
+    await client.post(
+        "/api/v1/forwarding-rules",
+        headers=_auth(token),
+        json={"email_address_id": ea_id, "destination_email": "a@x.com"},
+    )
 
     resp = await client.get("/api/v1/forwarding-rules", headers=_auth(token))
     assert resp.status_code == 200
-    assert resp.json()["data"]["total"] == 2
+    assert resp.json()["data"]["total"] == 1
 
 
 async def test_list_filter_by_email_address(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """按 email_address_id 过滤转发规则。"""
-    _patch_cf(monkeypatch)
+    calls = _patch_cf(monkeypatch)
     token = await _register_and_login(client)
     ea_id = await _setup_email_address(client, token)
+    _mark_dest_verified(calls, "a@x.com")
     await client.post(
         "/api/v1/forwarding-rules",
         headers=_auth(token),
@@ -238,9 +337,10 @@ async def test_get_forwarding_rule(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """按 id 获取转发规则详情。"""
-    _patch_cf(monkeypatch)
+    calls = _patch_cf(monkeypatch)
     token = await _register_and_login(client)
     ea_id = await _setup_email_address(client, token)
+    _mark_dest_verified(calls, "dest@other.com")
     created = await client.post(
         "/api/v1/forwarding-rules",
         headers=_auth(token),
@@ -273,6 +373,7 @@ async def test_access_isolation(
     calls = _patch_cf(monkeypatch)
     token_a = await _register_and_login(client)
     ea_id = await _setup_email_address(client, token_a)
+    _mark_dest_verified(calls, "dest@other.com")
     created = await client.post(
         "/api/v1/forwarding-rules",
         headers=_auth(token_a),
@@ -301,9 +402,10 @@ async def test_update_forwarding_rule(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """更新转发规则的启用状态。"""
-    _patch_cf(monkeypatch)
+    calls = _patch_cf(monkeypatch)
     token = await _register_and_login(client)
     ea_id = await _setup_email_address(client, token)
+    _mark_dest_verified(calls, "dest@other.com")
     created = await client.post(
         "/api/v1/forwarding-rules",
         headers=_auth(token),
@@ -327,6 +429,7 @@ async def test_delete_forwarding_rule(
     calls = _patch_cf(monkeypatch)
     token = await _register_and_login(client)
     ea_id = await _setup_email_address(client, token)
+    _mark_dest_verified(calls, "dest@other.com")
     created = await client.post(
         "/api/v1/forwarding-rules",
         headers=_auth(token),
@@ -350,3 +453,32 @@ async def test_delete_forwarding_rule(
         f"/api/v1/forwarding-rules/{rule_id}", headers=_auth(token)
     )
     assert after.status_code == 404
+
+
+async def test_rebind_after_delete(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """删除转发规则后，源邮箱可重新绑定新的转发目标。"""
+    calls = _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    ea_id = await _setup_email_address(client, token)
+    _mark_dest_verified(calls, "a@x.com")
+    created = await client.post(
+        "/api/v1/forwarding-rules",
+        headers=_auth(token),
+        json={"email_address_id": ea_id, "destination_email": "a@x.com"},
+    )
+    rule_id = created.json()["data"]["id"]
+
+    await client.delete(
+        f"/api/v1/forwarding-rules/{rule_id}", headers=_auth(token)
+    )
+
+    # 重新绑定新目标应成功
+    _mark_dest_verified(calls, "b@x.com")
+    rebound = await client.post(
+        "/api/v1/forwarding-rules",
+        headers=_auth(token),
+        json={"email_address_id": ea_id, "destination_email": "b@x.com"},
+    )
+    assert rebound.status_code == 201

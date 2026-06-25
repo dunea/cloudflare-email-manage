@@ -12,6 +12,7 @@ from app.web import (
     auth,
     cf_accounts,
     dashboard,
+    destination_addresses,
     domains,
     email_addresses,
     forwarding_rules,
@@ -29,6 +30,7 @@ web_router.include_router(auth.router)
 web_router.include_router(cf_accounts.router)
 web_router.include_router(domains.router)
 web_router.include_router(email_addresses.router)
+web_router.include_router(destination_addresses.router)
 web_router.include_router(forwarding_rules.router)
 web_router.include_router(inbound.router)
 web_router.include_router(outbound.router)
