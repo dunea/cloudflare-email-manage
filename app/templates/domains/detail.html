@@ -13,7 +13,6 @@
     <h3 class="mb-4 font-semibold text-slate-800">域名信息</h3>
     <dl class="space-y-3 text-sm">
       <div class="flex justify-between gap-4"><dt class="text-slate-500">Zone ID</dt><dd class="font-mono text-xs text-slate-700">{{ domain.zone_id }}</dd></div>
-      <div class="flex justify-between gap-4"><dt class="text-slate-500">归属</dt><dd>{% if domain.owner_type == "platform" %}{{ badge("平台域名", "indigo") }}{% else %}{{ badge("用户域名", "slate") }}{% endif %}</dd></div>
       <div class="flex justify-between gap-4"><dt class="text-slate-500">状态</dt><dd class="text-slate-700">{{ domain.status }}</dd></div>
       <div class="flex justify-between gap-4"><dt class="text-slate-500">创建时间</dt><dd class="text-slate-700">{{ domain.created_at | dt }}</dd></div>
     </dl>
@@ -42,10 +41,10 @@
 
 {% if can_assign %}
 <div class="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-  <h3 class="mb-4 font-semibold text-slate-800">域名分配（管理员）</h3>
+  <h3 class="mb-4 font-semibold text-slate-800">域名共享</h3>
   <form method="post" action="/domains/{{ domain.id }}/assignments" class="mb-5 flex flex-wrap items-end gap-3">
     <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">分配给用户</label>
+      <label class="mb-1 block text-sm font-medium text-slate-700">共享给用户</label>
       <select name="user_id" required
               class="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
         <option value="" disabled selected>选择用户…</option>
@@ -54,7 +53,7 @@
         {% endfor %}
       </select>
     </div>
-    <button type="submit" class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">分配</button>
+    <button type="submit" class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">共享</button>
   </form>
 
   {% if assignments %}
@@ -63,14 +62,14 @@
     <li class="flex items-center justify-between py-2">
       <span class="text-slate-700">{{ a.username }}</span>
       <form method="post" action="/domains/{{ domain.id }}/assignments/{{ a.user_id }}/delete"
-            x-data @submit.prevent="$store.confirm.ask($el, '取消该用户的域名分配？')">
-        <button type="submit" class="text-sm font-medium text-red-600 hover:underline">取消分配</button>
+            x-data @submit.prevent="$store.confirm.ask($el, '取消该用户的域名共享？')">
+        <button type="submit" class="text-sm font-medium text-red-600 hover:underline">取消共享</button>
       </form>
     </li>
     {% endfor %}
   </ul>
   {% else %}
-  <p class="text-sm text-slate-400">尚未分配给任何用户。</p>
+  <p class="text-sm text-slate-400">尚未共享给任何用户。</p>
   {% endif %}
 </div>
 {% endif %}

@@ -1,4 +1,4 @@
-"""域名页面路由：列表、详情，以及（管理员）平台域名分配管理。
+"""域名页面路由：列表、详情，以及域名所有者共享域名给其他用户。
 
 复用 app/services/domain_service、email_service、user_service。
 """
@@ -13,7 +13,7 @@ from app.exceptions import AppException, NotFoundError
 from app.schemas.domain import DomainRead
 from app.schemas.email_address import EmailAddressRead
 from app.services import domain_service, email_service, user_service
-from app.web.deps import AdminWebUser, CurrentWebUser
+from app.web.deps import CurrentWebUser
 from app.web.templating import error_message, flash, render, render_error
 
 router = APIRouter(tags=["前端-域名"])
@@ -27,7 +27,7 @@ async def list_domains(
     page: int = Query(default=1, ge=1),
     size: int = Query(default=20, ge=1, le=100),
 ) -> Response:
-    """域名列表（管理员可见全部，普通用户见自有 + 被分配）。"""
+    """域名列表（管理员可见全部，普通用户见自有 + 被共享的）。"""
     domains, total = await domain_service.list_domains_for_user(
         session, user, page, size
     )
@@ -50,7 +50,7 @@ async def domain_detail(
     session: SessionDep,
     domain_id: int,
 ) -> Response:
-    """域名详情：域名下邮箱地址 +（管理员对平台域名）分配管理。"""
+    """域名详情：域名下邮箱地址 +（域名所有者）共享管理。"""
     try:
         domain = await domain_service.get_domain_or_404(session, domain_id, user)
     except NotFoundError:
@@ -60,9 +60,15 @@ async def domain_detail(
         session, user, 1, 100, domain_id
     )
 
+    # 判断当前用户是否为域名所有者（可共享给他人）
+    from app.services.domain_service import _is_domain_owner
+
+    can_assign = user.role == "admin" or await _is_domain_owner(
+        session, user, domain
+    )
+
     assignments: list[dict[str, object]] = []
     assignable_users: list[object] = []
-    can_assign = user.role == "admin" and domain.owner_type == "platform"
     if can_assign:
         rows = await domain_service.list_domain_assignments(session, domain_id)
         users, _ = await user_service.list_users(session, 1, 200)
@@ -99,34 +105,36 @@ async def domain_detail(
 @router.post("/domains/{domain_id:int}/assignments")
 async def assign_domain(
     request: Request,
-    _: AdminWebUser,
+    user: CurrentWebUser,
     session: SessionDep,
     domain_id: int,
     target_user_id: Annotated[int, Form(alias="user_id")],
 ) -> Response:
-    """将平台域名分配给用户（仅管理员）。"""
+    """将域名共享给用户（域名所有者可操作）。"""
     try:
-        await domain_service.assign_domain(session, domain_id, target_user_id)
+        await domain_service.assign_domain(session, domain_id, target_user_id, user)
     except AppException as exc:
         flash(request, error_message(exc), "error")
         return RedirectResponse(f"/domains/{domain_id}", status_code=303)
-    flash(request, "已分配域名给该用户", "success")
+    flash(request, "已共享域名给该用户", "success")
     return RedirectResponse(f"/domains/{domain_id}", status_code=303)
 
 
 @router.post("/domains/{domain_id:int}/assignments/{target_user_id:int}/delete")
 async def unassign_domain(
     request: Request,
-    _: AdminWebUser,
+    user: CurrentWebUser,
     session: SessionDep,
     domain_id: int,
     target_user_id: int,
 ) -> Response:
-    """取消域名分配（仅管理员）。"""
+    """取消域名共享（域名所有者可操作）。"""
     try:
-        await domain_service.unassign_domain(session, domain_id, target_user_id)
+        await domain_service.unassign_domain(
+            session, domain_id, target_user_id, user
+        )
     except AppException as exc:
         flash(request, error_message(exc), "error")
         return RedirectResponse(f"/domains/{domain_id}", status_code=303)
-    flash(request, "已取消分配", "success")
+    flash(request, "已取消共享", "success")
     return RedirectResponse(f"/domains/{domain_id}", status_code=303)

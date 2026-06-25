@@ -1,4 +1,4 @@
-"""域名同步与分配测试。
+"""域名同步与共享测试。
 
 所有 Cloudflare 调用通过 monkeypatch 替换 CloudflareClient 方法 Mock，
 不发出真实网络请求。
@@ -57,17 +57,21 @@ def _auth(token: str) -> dict[str, str]:
 def _patch_cf(
     monkeypatch: pytest.MonkeyPatch, zones: list[dict[str, str]] | None = None
 ) -> None:
-    """Mock CloudflareClient 的 verify_token 与 list_zones。"""
+    """Mock CloudflareClient 的 verify_token、list_accounts 与 list_zones。"""
 
     async def _fake_verify(self: CloudflareClient) -> dict[str, str]:
         return {"status": "active"}
 
+    async def _fake_list_accounts(self: CloudflareClient) -> list[dict[str, str]]:
+        return [{"id": "acc-123", "name": "test-account"}]
+
     async def _fake_list_zones(
-        self: CloudflareClient, account_id: str
+        self: CloudflareClient, account_id: str | None = None
     ) -> list[dict[str, str]]:
         return ZONES if zones is None else zones
 
     monkeypatch.setattr(CloudflareClient, "verify_token", _fake_verify)
+    monkeypatch.setattr(CloudflareClient, "list_accounts", _fake_list_accounts)
     monkeypatch.setattr(CloudflareClient, "list_zones", _fake_list_zones)
 
 
@@ -75,19 +79,15 @@ async def _bind(
     client: AsyncClient,
     token: str,
     *,
-    account_id: str = "acc-123",
-    permission_type: str = "all",
-    allowed_zone_ids: list[str] | None = None,
+    account_id: str | None = "acc-123",
 ) -> int:
     """绑定 CF 账号，返回账号 id。"""
     payload: dict[str, object] = {
         "name": "主账号",
         "api_token": "cf-token",
-        "account_id": account_id,
-        "permission_type": permission_type,
     }
-    if allowed_zone_ids is not None:
-        payload["allowed_zone_ids"] = allowed_zone_ids
+    if account_id is not None:
+        payload["account_id"] = account_id
     resp = await client.post(
         "/api/v1/cf-accounts", headers=_auth(token), json=payload
     )
@@ -113,8 +113,6 @@ async def test_sync_domains(
     assert data["synced"] == 2
     names = {d["domain_name"] for d in data["domains"]}
     assert names == {"example.com", "example.org"}
-    # 普通用户的域名归属为 user
-    assert all(d["owner_type"] == "user" for d in data["domains"])
 
 
 async def test_sync_is_idempotent(
@@ -134,24 +132,6 @@ async def test_sync_is_idempotent(
 
     listing = await client.get("/api/v1/domains", headers=_auth(token))
     assert listing.json()["data"]["total"] == 2
-
-
-async def test_sync_respects_specific_permission(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """specific 权限只同步 allowed_zone_ids 内的域名。"""
-    _patch_cf(monkeypatch)
-    token = await _register_and_login(client)
-    account_id = await _bind(
-        client, token, permission_type="specific", allowed_zone_ids=["zone1"]
-    )
-
-    resp = await client.post(
-        f"/api/v1/cf-accounts/{account_id}/sync", headers=_auth(token)
-    )
-    data = resp.json()["data"]
-    assert data["synced"] == 1
-    assert data["domains"][0]["zone_id"] == "zone1"
 
 
 async def test_sync_requires_auth(client: AsyncClient) -> None:
@@ -221,53 +201,35 @@ async def test_domain_access_isolation(
     assert listing.json()["data"]["total"] == 0
 
 
-# ---- 平台域名分配（管理员）----
+# ---- 域名共享（所有者可操作）----
 
 
-async def test_admin_sync_marks_platform(
-    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """管理员同步的域名归属为 platform。"""
+async def _setup_owner_domain(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> tuple[str, int]:
+    """普通用户绑定并同步域名，返回 (用户令牌, 域名 id)。"""
     _patch_cf(monkeypatch)
-    await ensure_admin_user(db_session)
-    token = await _admin_token(client)
+    token = await _register_and_login(client)
     account_id = await _bind(client, token)
-    resp = await client.post(
+    sync = await client.post(
         f"/api/v1/cf-accounts/{account_id}/sync", headers=_auth(token)
     )
-    data = resp.json()["data"]
-    assert all(d["owner_type"] == "platform" for d in data["domains"])
-
-
-async def _admin_setup_platform_domain(
-    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> tuple[str, int]:
-    """管理员绑定并同步出平台域名，返回 (管理员令牌, 域名 id)。"""
-    _patch_cf(monkeypatch)
-    await ensure_admin_user(db_session)
-    admin_token = await _admin_token(client)
-    account_id = await _bind(client, admin_token)
-    sync = await client.post(
-        f"/api/v1/cf-accounts/{account_id}/sync", headers=_auth(admin_token)
-    )
     domain_id = sync.json()["data"]["domains"][0]["id"]
-    return admin_token, domain_id
+    return token, domain_id
 
 
-async def test_admin_assign_domain_to_user(
-    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+async def test_owner_share_domain_to_user(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """管理员分配平台域名后，目标用户可见可访问。"""
-    admin_token, domain_id = await _admin_setup_platform_domain(
-        client, db_session, monkeypatch
-    )
+    """域名所有者共享域名后，目标用户可见可访问。"""
+    owner_token, domain_id = await _setup_owner_domain(client, monkeypatch)
 
     # 创建普通用户
     reg = await client.post(
         "/api/v1/auth/register",
         json={
-            "username": "alice",
-            "email": "alice@example.com",
+            "username": "bob",
+            "email": "bob@example.com",
             "password": "password123",
         },
     )
@@ -275,22 +237,23 @@ async def test_admin_assign_domain_to_user(
     user_token = (
         await client.post(
             "/api/v1/auth/login",
-            json={"username": "alice", "password": "password123"},
+            json={"username": "bob", "password": "password123"},
         )
     ).json()["data"]["access_token"]
 
-    # 分配前用户看不到
+    # 共享前用户看不到
     before = await client.get("/api/v1/domains", headers=_auth(user_token))
     assert before.json()["data"]["total"] == 0
 
+    # 所有者共享
     assign = await client.post(
         f"/api/v1/domains/{domain_id}/assignments",
-        headers=_auth(admin_token),
+        headers=_auth(owner_token),
         json={"user_id": user_id},
     )
     assert assign.status_code == 201
 
-    # 分配后用户可见可访问
+    # 共享后用户可见可访问
     after = await client.get("/api/v1/domains", headers=_auth(user_token))
     assert after.json()["data"]["total"] == 1
     detail = await client.get(
@@ -299,18 +262,16 @@ async def test_admin_assign_domain_to_user(
     assert detail.status_code == 200
 
 
-async def test_assign_duplicate_conflict(
-    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+async def test_share_duplicate_conflict(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """重复分配同一域名给同一用户返回 409。"""
-    admin_token, domain_id = await _admin_setup_platform_domain(
-        client, db_session, monkeypatch
-    )
+    """重复共享同一域名给同一用户返回 409。"""
+    owner_token, domain_id = await _setup_owner_domain(client, monkeypatch)
     reg = await client.post(
         "/api/v1/auth/register",
         json={
-            "username": "alice",
-            "email": "alice@example.com",
+            "username": "bob",
+            "email": "bob@example.com",
             "password": "password123",
         },
     )
@@ -318,27 +279,118 @@ async def test_assign_duplicate_conflict(
 
     first = await client.post(
         f"/api/v1/domains/{domain_id}/assignments",
-        headers=_auth(admin_token),
+        headers=_auth(owner_token),
         json={"user_id": user_id},
     )
     assert first.status_code == 201
     second = await client.post(
         f"/api/v1/domains/{domain_id}/assignments",
-        headers=_auth(admin_token),
+        headers=_auth(owner_token),
         json={"user_id": user_id},
     )
     assert second.status_code == 409
 
 
-async def test_assign_non_platform_domain_rejected(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
+async def test_non_owner_cannot_share(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """普通用户域名（owner_type=user）不可被分配。"""
+    """非域名所有者无法共享域名（返回 403）。"""
+    owner_token, domain_id = await _setup_owner_domain(client, monkeypatch)
+
+    # 另一个用户尝试共享该域名
+    other_token = await _register_and_login(
+        client, username="carol", email="carol@example.com"
+    )
+    # 注册一个目标用户
+    reg = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "username": "dave",
+            "email": "dave@example.com",
+            "password": "password123",
+        },
+    )
+    target_id = reg.json()["data"]["id"]
+
+    resp = await client.post(
+        f"/api/v1/domains/{domain_id}/assignments",
+        headers=_auth(other_token),
+        json={"user_id": target_id},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["code"] == 1403
+
+
+async def test_cannot_share_to_self(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """不能将域名共享给自己。"""
+    owner_token, domain_id = await _setup_owner_domain(client, monkeypatch)
+
+    # 获取自己的 user_id
+    me = await client.get("/api/v1/users/me", headers=_auth(owner_token))
+    my_id = me.json()["data"]["id"]
+
+    resp = await client.post(
+        f"/api/v1/domains/{domain_id}/assignments",
+        headers=_auth(owner_token),
+        json={"user_id": my_id},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["code"] == 1400
+
+
+async def test_unassign_domain(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """取消共享后用户不再可见域名。"""
+    owner_token, domain_id = await _setup_owner_domain(client, monkeypatch)
+    reg = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "username": "bob",
+            "email": "bob@example.com",
+            "password": "password123",
+        },
+    )
+    user_id = reg.json()["data"]["id"]
+    user_token = (
+        await client.post(
+            "/api/v1/auth/login",
+            json={"username": "bob", "password": "password123"},
+        )
+    ).json()["data"]["access_token"]
+
+    await client.post(
+        f"/api/v1/domains/{domain_id}/assignments",
+        headers=_auth(owner_token),
+        json={"user_id": user_id},
+    )
+    # 列出共享记录
+    listing = await client.get(
+        f"/api/v1/domains/{domain_id}/assignments", headers=_auth(owner_token)
+    )
+    assert len(listing.json()["data"]) == 1
+
+    # 取消共享
+    unassign = await client.delete(
+        f"/api/v1/domains/{domain_id}/assignments/{user_id}",
+        headers=_auth(owner_token),
+    )
+    assert unassign.status_code == 200
+
+    after = await client.get("/api/v1/domains", headers=_auth(user_token))
+    assert after.json()["data"]["total"] == 0
+
+
+async def test_admin_can_share_any_domain(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """管理员可以共享任何域名（包括普通用户的域名）。"""
     _patch_cf(monkeypatch)
     await ensure_admin_user(db_session)
-    admin_token = await _admin_token(client)
 
-    # 普通用户绑定并同步（域名 owner_type=user）
+    # 普通用户绑定并同步域名
     user_token = await _register_and_login(client)
     account_id = await _bind(client, user_token)
     sync = await client.post(
@@ -346,7 +398,10 @@ async def test_assign_non_platform_domain_rejected(
     )
     domain_id = sync.json()["data"]["domains"][0]["id"]
 
-    # 管理员尝试分配该域名 -> 400
+    # 管理员登录
+    admin_tok = await _admin_token(client)
+
+    # 创建目标用户
     reg = await client.post(
         "/api/v1/auth/register",
         json={
@@ -356,76 +411,11 @@ async def test_assign_non_platform_domain_rejected(
         },
     )
     target_id = reg.json()["data"]["id"]
+
+    # 管理员共享普通用户的域名
     resp = await client.post(
         f"/api/v1/domains/{domain_id}/assignments",
-        headers=_auth(admin_token),
+        headers=_auth(admin_tok),
         json={"user_id": target_id},
     )
-    assert resp.status_code == 400
-    assert resp.json()["code"] == 1400
-
-
-async def test_assign_requires_admin(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """普通用户调用分配接口返回 403。"""
-    _patch_cf(monkeypatch)
-    token = await _register_and_login(client)
-    account_id = await _bind(client, token)
-    sync = await client.post(
-        f"/api/v1/cf-accounts/{account_id}/sync", headers=_auth(token)
-    )
-    domain_id = sync.json()["data"]["domains"][0]["id"]
-
-    resp = await client.post(
-        f"/api/v1/domains/{domain_id}/assignments",
-        headers=_auth(token),
-        json={"user_id": 1},
-    )
-    assert resp.status_code == 403
-    assert resp.json()["code"] == 1403
-
-
-async def test_unassign_domain(
-    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """取消分配后用户不再可见域名。"""
-    admin_token, domain_id = await _admin_setup_platform_domain(
-        client, db_session, monkeypatch
-    )
-    reg = await client.post(
-        "/api/v1/auth/register",
-        json={
-            "username": "alice",
-            "email": "alice@example.com",
-            "password": "password123",
-        },
-    )
-    user_id = reg.json()["data"]["id"]
-    user_token = (
-        await client.post(
-            "/api/v1/auth/login",
-            json={"username": "alice", "password": "password123"},
-        )
-    ).json()["data"]["access_token"]
-
-    await client.post(
-        f"/api/v1/domains/{domain_id}/assignments",
-        headers=_auth(admin_token),
-        json={"user_id": user_id},
-    )
-    # 列出分配记录
-    listing = await client.get(
-        f"/api/v1/domains/{domain_id}/assignments", headers=_auth(admin_token)
-    )
-    assert len(listing.json()["data"]) == 1
-
-    # 取消分配
-    unassign = await client.delete(
-        f"/api/v1/domains/{domain_id}/assignments/{user_id}",
-        headers=_auth(admin_token),
-    )
-    assert unassign.status_code == 200
-
-    after = await client.get("/api/v1/domains", headers=_auth(user_token))
-    assert after.json()["data"]["total"] == 0
+    assert resp.status_code == 201

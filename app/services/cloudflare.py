@@ -96,20 +96,46 @@ class CloudflareClient:
         result = await self._request("GET", "/user/tokens/verify")
         return result if isinstance(result, dict) else {}
 
+    # ---- Account（账户）----
+
+    async def list_accounts(self) -> list[dict[str, Any]]:
+        """列出 Token 可访问的 CF 账户（GET /accounts）。"""
+        if settings.CF_FAKE_MODE:
+            return [{"id": "acc-e2e", "name": "e2e-account"}]
+        result = await self._request("GET", "/accounts")
+        return result if isinstance(result, list) else []
+
     # ---- Zone（域名）----
 
-    async def list_zones(self, account_id: str) -> list[dict[str, Any]]:
-        """列出指定账号下的所有 Zone（域名）。"""
+    async def list_zones(self, account_id: str | None = None) -> list[dict[str, Any]]:
+        """列出 Zone（域名），自动分页拉取全部。
+
+        account_id 为 None 时不按账户过滤，返回 Token 可访问的所有 Zone，
+        每个 Zone 自带 ``account: {id, name}`` 字段，仅需 Zone:Zone:Read 权限。
+        """
         if settings.CF_FAKE_MODE:
             return [
-                {"id": "zone-e2e", "name": "e2e.example.com", "status": "active"}
+                {
+                    "id": "zone-e2e",
+                    "name": "e2e.example.com",
+                    "status": "active",
+                    "account": {"id": "acc-e2e", "name": "e2e-account"},
+                }
             ]
-        result = await self._request(
-            "GET",
-            "/zones",
-            params={"account.id": account_id, "per_page": 50},
-        )
-        return result if isinstance(result, list) else []
+        all_zones: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            params: dict[str, Any] = {"per_page": 50, "page": page}
+            if account_id is not None:
+                params["account.id"] = account_id
+            result = await self._request("GET", "/zones", params=params)
+            if not isinstance(result, list) or len(result) == 0:
+                break
+            all_zones.extend(result)
+            if len(result) < 50:
+                break
+            page += 1
+        return all_zones
 
     async def get_zone(self, zone_id: str) -> dict[str, Any]:
         """获取单个 Zone 详情。"""

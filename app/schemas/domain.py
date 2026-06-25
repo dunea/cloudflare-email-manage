@@ -14,7 +14,6 @@ class DomainRead(BaseModel):
     cf_account_id: int
     zone_id: str
     domain_name: str
-    owner_type: str
     status: str
     created_at: datetime
 
@@ -27,7 +26,7 @@ class DomainSyncResult(BaseModel):
 
 
 class DomainAssignmentCreate(BaseModel):
-    """平台域名分配请求体。"""
+    """域名共享请求体。"""
 
     user_id: int = Field(gt=0)
 

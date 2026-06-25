@@ -29,16 +29,6 @@
         <dd class="font-mono text-slate-700">{{ account.account_id }}</dd>
       </div>
       <div class="flex justify-between gap-4">
-        <dt class="text-slate-500">权限范围</dt>
-        <dd class="text-slate-700">{{ "全部域名" if account.permission_type == "all" else "指定域名" }}</dd>
-      </div>
-      {% if account.allowed_zone_ids %}
-      <div class="flex justify-between gap-4">
-        <dt class="text-slate-500">允许的 Zone</dt>
-        <dd class="text-right font-mono text-xs text-slate-700">{{ account.allowed_zone_ids | join(", ") }}</dd>
-      </div>
-      {% endif %}
-      <div class="flex justify-between gap-4">
         <dt class="text-slate-500">状态</dt>
         <dd>{% if account.is_active %}{{ badge("启用", "green") }}{% else %}{{ badge("停用", "slate") }}{% endif %}</dd>
       </div>
@@ -51,33 +41,17 @@
 
   <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
     <h3 class="mb-4 font-semibold text-slate-800">编辑</h3>
-    <form method="post" action="/cf-accounts/{{ account.id }}/edit" class="space-y-4"
-          x-data="{ ptype: '{{ account.permission_type }}' }">
+    <form method="post" action="/cf-accounts/{{ account.id }}/edit" class="space-y-4">
       <div>
         <label class="mb-1 block text-sm font-medium text-slate-700">名称</label>
         <input name="name" value="{{ account.name }}" required maxlength="128"
                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
       </div>
       <div>
-        <label class="mb-1 block text-sm font-medium text-slate-700">权限范围</label>
-        <div class="flex gap-4 text-sm">
-          <label class="flex items-center gap-2">
-            <input type="radio" name="permission_type" value="all" x-model="ptype" /> 全部域名
-          </label>
-          <label class="flex items-center gap-2">
-            <input type="radio" name="permission_type" value="specific" x-model="ptype" /> 指定域名
-          </label>
-        </div>
-      </div>
-      <div x-show="ptype === 'specific'" x-cloak>
-        <label class="mb-1 block text-sm font-medium text-slate-700">允许的 Zone ID</label>
-        <textarea name="allowed_zone_ids" rows="2" placeholder="多个用逗号或换行分隔"
-                  class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">{{ account.allowed_zone_ids | join(", ") if account.allowed_zone_ids else "" }}</textarea>
-      </div>
-      <div>
         <label class="mb-1 block text-sm font-medium text-slate-700">更换 API Token（留空则不变）</label>
         <input name="api_token" type="password"
                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+        <p class="mt-1 text-xs text-slate-400">更换 Token 后将自动刷新 Account ID</p>
       </div>
       <label class="flex items-center gap-2 text-sm text-slate-700">
         <input type="checkbox" name="is_active" {% if account.is_active %}checked{% endif %} /> 启用该账号

@@ -25,8 +25,6 @@ class Domain(Base):
     cf_account_id: Mapped[int] = mapped_column(ForeignKey("cf_account.id"), index=True)
     zone_id: Mapped[str] = mapped_column(String(64), index=True)
     domain_name: Mapped[str] = mapped_column(String(255), index=True)
-    # 归属类型：user（用户自有）/ platform（平台所有，可分配）
-    owner_type: Mapped[str] = mapped_column(String(16), default="user")
     # 状态：active / pending / moved 等
     status: Mapped[str] = mapped_column(String(32), default="active")
     created_at: Mapped[datetime] = mapped_column(

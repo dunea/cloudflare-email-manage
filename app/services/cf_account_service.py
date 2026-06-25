@@ -1,4 +1,4 @@
-"""CF 账号绑定逻辑：校验 Token、加密存储、查询与软删除。"""
+"""CF 账号绑定逻辑：校验 Token、自动获取 account_id、加密存储、查询与软删除。"""
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,37 +10,63 @@ from app.services.cloudflare import CloudflareClient
 from app.services.crypto import decrypt_token, encrypt_token
 
 
-def _join_zone_ids(zone_ids: list[str] | None) -> str | None:
-    """将 zone_id 列表合并为逗号分隔字符串入库。"""
-    if not zone_ids:
-        return None
-    return ",".join(zone_ids)
-
-
 def build_client(cf_account: CFAccount) -> CloudflareClient:
     """根据 CF 账号解密 Token 并构造 CloudflareClient。"""
     token = decrypt_token(cf_account.encrypted_api_token)
     return CloudflareClient(token)
 
 
+async def _resolve_account_id(client: CloudflareClient, explicit: str | None) -> str:
+    """获取 CF account_id：优先使用用户传入值，否则自动从 Zone 列表提取。
+
+    先调 GET /zones（不带 account.id，仅需 Zone:Zone:Read 权限），
+    从第一个 Zone 的 account.id 字段提取 account_id。
+    若 Zone 列表为空，再 fallback 到 GET /accounts（需要 Account 权限）。
+    """
+    if explicit:
+        return explicit
+
+    # 方案一：从 Zone 列表提取（只需 Zone:Zone:Read）
+    zones = await client.list_zones()
+    if zones:
+        first_zone = zones[0]
+        account = first_zone.get("account")
+        if isinstance(account, dict):
+            account_id = account.get("id")
+            if account_id:
+                return str(account_id)
+
+    # 方案二：fallback 到 GET /accounts（需要 Account 权限）
+    accounts = await client.list_accounts()
+    if accounts:
+        first = accounts[0]
+        account_id = first.get("id")
+        if account_id:
+            return str(account_id)
+
+    raise AppException(
+        "无法自动获取 Account ID：Token 下没有可访问的域名，"
+        "也无法读取账户列表。请手动填写 Account ID。",
+        code=1400,
+    )
+
+
 async def bind_cf_account(
     session: AsyncSession, user: User, data: CFAccountCreate
 ) -> CFAccount:
-    """绑定 CF 账号：先校验 Token 有效性，再加密存储。"""
-    if data.permission_type == "specific" and not data.allowed_zone_ids:
-        raise AppException("权限类型为 specific 时必须提供 allowed_zone_ids", code=1400)
-
+    """绑定 CF 账号：校验 Token、自动获取 account_id、加密存储。"""
     # 调用 CF 校验 Token（无效会抛出 CloudflareError）
     client = CloudflareClient(data.api_token)
     await client.verify_token()
+
+    # 自动获取 account_id（用户未传时从 CF API 拉取）
+    account_id = await _resolve_account_id(client, data.account_id)
 
     cf_account = CFAccount(
         user_id=user.id,
         name=data.name,
         encrypted_api_token=encrypt_token(data.api_token),
-        account_id=data.account_id,
-        permission_type=data.permission_type,
-        allowed_zone_ids=_join_zone_ids(data.allowed_zone_ids),
+        account_id=account_id,
     )
     session.add(cf_account)
     await session.commit()
@@ -86,25 +112,17 @@ async def list_cf_accounts(
 async def update_cf_account(
     session: AsyncSession, cf_account: CFAccount, data: CFAccountUpdate
 ) -> CFAccount:
-    """更新 CF 账号；若提供新 Token 则重新校验并加密存储。"""
+    """更新 CF 账号；若提供新 Token 则重新校验、自动获取 account_id 并加密存储。"""
     if data.name is not None:
         cf_account.name = data.name
-    if data.permission_type is not None:
-        cf_account.permission_type = data.permission_type
-    if data.allowed_zone_ids is not None:
-        cf_account.allowed_zone_ids = _join_zone_ids(data.allowed_zone_ids)
     if data.is_active is not None:
         cf_account.is_active = data.is_active
     if data.api_token is not None:
         client = CloudflareClient(data.api_token)
         await client.verify_token()
         cf_account.encrypted_api_token = encrypt_token(data.api_token)
-
-    if (
-        cf_account.permission_type == "specific"
-        and not cf_account.allowed_zone_ids
-    ):
-        raise AppException("权限类型为 specific 时必须提供 allowed_zone_ids", code=1400)
+        # 更新 Token 后自动刷新 account_id
+        cf_account.account_id = await _resolve_account_id(client, None)
 
     await session.commit()
     await session.refresh(cf_account)
