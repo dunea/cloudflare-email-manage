@@ -9,11 +9,22 @@
 
 {% if options %}
 <form method="post" action="/forwarding-rules"
+      x-data="{
+        emailAccount: {{ email_account | tojson }},
+        destsByAccount: {{ dests_by_account | tojson }},
+        selectedEmail: null,
+        get currentAccount() { return this.emailAccount[this.selectedEmail] || "" },
+        get availableDests() {
+          const list = this.destsByAccount[this.currentAccount] || [];
+          return list.map(d => ({ value: d.email, label: d.email }));
+        }
+      }"
       class="mb-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
   <div class="min-w-[200px] flex-1">
     <label class="mb-1 block text-sm font-medium text-slate-700">源邮箱地址</label>
-    <select name="email_address_id" required
+    <select name="email_address_id" required x-model="selectedEmail"
             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+      <option value="" disabled selected>请选择</option>
       {% for o in options %}
       <option value="{{ o.id }}">{{ o.full_address }}</option>
       {% endfor %}
@@ -22,14 +33,29 @@
   <div class="flex items-end pb-2 text-slate-400">→</div>
   <div class="min-w-[200px] flex-1">
     <label class="mb-1 block text-sm font-medium text-slate-700">转发目标邮箱</label>
-    <input name="destination_email" type="email" required placeholder="dest@example.com"
-           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+    <select name="destination_email" required
+            :disabled="!availableDests.length"
+            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30 disabled:bg-slate-100">
+      <template x-for="d in availableDests" :key="d.value">
+        <option :value="d.value" x-text="d.label"></option>
+      </template>
+    </select>
+    <template x-if="selectedEmail && !availableDests.length">
+      <p class="mt-1 text-xs text-amber-600">该账号下暂无已验证的目标地址，请先在「目标地址」中添加并验证。</p>
+    </template>
+    {% if not dest_options %}
+    <p class="mt-1 text-xs text-amber-600">还没有已验证的目标地址，请先在「目标地址」中添加并验证。</p>
+    {% endif %}
   </div>
   <button type="submit" class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">创建</button>
 </form>
+{% elif not dest_options %}
+<div class="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+  创建转发规则前，请先在「邮箱地址」创建源邮箱，并在「目标地址」添加并验证转发目标邮箱。
+</div>
 {% else %}
 <div class="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-  还没有邮箱地址，请先在「邮箱地址」创建后再添加转发规则。
+  所有源邮箱均已绑定转发规则。如需更换目标，请先删除对应规则释放源邮箱。
 </div>
 {% endif %}
 

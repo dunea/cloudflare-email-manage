@@ -2,6 +2,7 @@
 
 from app.models.api_key import APIKey
 from app.models.cf_account import CFAccount
+from app.models.destination_address import DestinationAddress
 from app.models.domain import Domain
 from app.models.domain_assignment import DomainAssignment
 from app.models.email_address import EmailAddress
@@ -12,6 +13,7 @@ from app.models.user import User
 __all__ = [
     "APIKey",
     "CFAccount",
+    "DestinationAddress",
     "Domain",
     "DomainAssignment",
     "EmailAddress",

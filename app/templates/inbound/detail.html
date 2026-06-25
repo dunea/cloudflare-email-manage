@@ -6,6 +6,14 @@
   <h1 class="mt-2 text-2xl font-semibold text-slate-900">{{ email.subject or "(无主题)" }}</h1>
 </div>
 
+{% set is_cf_verify = (email.from_address | lower).startswith("cloudflare") and "verify" in (email.subject | lower) %}
+{% if is_cf_verify %}
+<div class="mb-4 rounded-xl border border-brand/30 bg-brand/5 px-4 py-3 text-sm text-brand-dark">
+  <p class="font-semibold">这是 Cloudflare 目标地址验证邮件</p>
+  <p class="mt-1">请在下方 HTML 预览中找到 <strong>Verify email address</strong> 按钮并点击，完成人机验证后该目标地址即可用于转发规则。</p>
+</div>
+{% endif %}
+
 <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
   <dl class="mb-5 grid gap-2 border-b border-slate-100 pb-5 text-sm sm:grid-cols-2">
     <div><dt class="inline text-slate-500">发件人：</dt><dd class="inline font-mono text-slate-700">{{ email.from_address }}</dd></div>

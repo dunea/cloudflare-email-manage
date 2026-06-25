@@ -86,8 +86,21 @@ def _patch_routing(monkeypatch: pytest.MonkeyPatch) -> None:
     ) -> dict[str, str]:
         return {"id": rule_id}
 
+    async def _list_dests(
+        self: CloudflareClient, account_id: str
+    ) -> list[dict[str, object]]:
+        # 返回一个已验证目标地址，满足转发规则创建前的 ensure_verified 校验
+        return [
+            {
+                "id": "cf-dest-dest@example.com",
+                "email": "dest@example.com",
+                "verified": "2026-06-26T08:00:00Z",
+            }
+        ]
+
     monkeypatch.setattr(CloudflareClient, "create_routing_rule", _create)
     monkeypatch.setattr(CloudflareClient, "delete_routing_rule", _delete)
+    monkeypatch.setattr(CloudflareClient, "list_destination_addresses", _list_dests)
 
 
 def _patch_send(monkeypatch: pytest.MonkeyPatch) -> None:
