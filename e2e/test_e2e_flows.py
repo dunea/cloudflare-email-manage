@@ -125,3 +125,56 @@ def test_api_key_created_once(page: Page, live_server: str) -> None:
 
     page.goto(f"{live_server}/api-keys")
     expect(page.locator("body")).not_to_contain_text("cfem_")
+
+
+def test_email_addresses_dropdown_contains_all_options(
+    page: Page, live_server: str
+) -> None:
+    """邮箱地址列表：复制链接 / 下载链接下拉应展示 8 项。"""
+    local_part = f"ddl{uuid.uuid4().hex[:6]}"
+    expected_address = f"{local_part}@e2e.example.com"
+
+    _signup_login(page, live_server)
+
+    page.goto(f"{live_server}/cf-accounts/new")
+    page.fill('input[name="name"]', "E2E账号")
+    page.fill('input[name="account_id"]', "acc-e2e")
+    page.fill('input[name="api_token"]', "tok-e2e")
+    page.get_by_role("button", name="校验并绑定").click()
+    page.wait_for_url(f"{live_server}/cf-accounts")
+    expect(page.locator("body")).to_contain_text("E2E账号")
+    page.get_by_role("link", name="E2E账号").click()
+    page.get_by_role("button", name="同步域名").click()
+    expect(page.locator("body")).to_contain_text("已同步 1 个域名")
+
+    page.goto(f"{live_server}/email-addresses")
+    page.wait_for_selector('input[name="local_part"]')
+    page.fill('input[name="local_part"]', local_part)
+    page.select_option('form[action="/email-addresses"] select[name="domain_id"]', index=0)
+    page.get_by_role("button", name="创建", exact=True).click()
+    expect(page.locator("body")).to_contain_text(expected_address)
+
+    page.get_by_role("button", name="复制链接").click()
+    expect(page.get_by_text("复制当前页（HTML 链接）")).to_be_visible()
+    expect(page.get_by_text("复制当前与之前页（HTML 链接）")).to_be_visible()
+    expect(page.get_by_text("复制近 100 条（HTML 链接）")).to_be_visible()
+    expect(page.get_by_text("复制近 500 条（HTML 链接）")).to_be_visible()
+    expect(page.get_by_text("复制当前页（纯文本链接）")).to_be_visible()
+    expect(page.get_by_text("复制近 500 条（纯文本链接）")).to_be_visible()
+    page.locator("body").click(position={"x": 5, "y": 5})
+
+    page.get_by_role("button", name="下载链接").click()
+    expect(page.get_by_text("下载当前页（HTML 链接）")).to_be_visible()
+    expect(page.get_by_text("下载当前与之前页（纯文本链接）")).to_be_visible()
+    expect(page.get_by_text("下载近 100 条（HTML 链接）")).to_be_visible()
+    expect(page.get_by_text("下载近 500 条（纯文本链接）")).to_be_visible()
+    page.locator("body").click(position={"x": 5, "y": 5})
+
+    # 实际点击跨页作用域「近 500 条」：触发 /email-addresses/links fetch。
+    # 断言响应 200（Cookie 鉴权可用），防止 401 类鉴权回归。
+    page.get_by_role("button", name="复制链接").click()
+    with page.expect_response(
+        lambda r: "/email-addresses/links" in r.url
+    ) as resp_info:
+        page.get_by_text("复制近 500 条（纯文本链接）").click()
+    assert resp_info.value.status == 200

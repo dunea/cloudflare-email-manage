@@ -3,6 +3,8 @@
 路由层只做参数接收、权限校验、调用 service 并返回统一响应。
 """
 
+from typing import Literal
+
 from fastapi import APIRouter, Query, status
 
 from app.dependencies import CurrentUser, SessionDep
@@ -42,12 +44,16 @@ async def list_email_addresses(
     current_user: CurrentUser,
     session: SessionDep,
     page: int = Query(default=1, ge=1),
-    size: int = Query(default=20, ge=1, le=100),
+    size: int = Query(default=25, ge=1, le=500),
     domain_id: int | None = Query(default=None, ge=1),
+    order: Literal["asc", "desc"] = Query(default="asc"),
 ) -> ApiResponse[PageData[EmailAddressRead]]:
-    """分页查询当前用户的邮箱地址，可按域名过滤。"""
+    """分页查询当前用户的邮箱地址，可按域名过滤、按 id 排序。
+
+    order: asc 为默认（按 id 升序，最旧在前）;desc 用于拉取最新 N 条（如"近 100/500 条"）。
+    """
     addresses, total = await email_service.list_email_addresses(
-        session, current_user, page, size, domain_id
+        session, current_user, page, size, domain_id, order
     )
     page_data = PageData[EmailAddressRead](
         total=total,
