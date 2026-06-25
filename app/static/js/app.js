@@ -2,22 +2,41 @@
 // 1) 复制到剪贴板；2) 全局 Toast 助手；3) 全局确认弹窗 Alpine store。
 
 // 复制文本到剪贴板（供 API Key 等一次性展示场景使用）。
+// 优先使用 Clipboard API（需安全上下文 HTTPS/localhost），
+// 不可用时回退到临时 textarea + execCommand('copy')。
 // 成功返回 true，失败返回 false（并已弹出失败提示，调用方无需重复提示）。
 window.copyToClipboard = async function (text, btn) {
+  let ok = false;
   try {
-    await navigator.clipboard.writeText(text);
-    if (btn) {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } else {
+      // 回退方案：临时 textarea + execCommand
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    if (ok && btn) {
       const original = btn.textContent;
       btn.textContent = "已复制";
       setTimeout(() => {
         btn.textContent = original;
       }, 1500);
     }
-    return true;
   } catch (err) {
-    window.toast("复制失败，请手动选择文本复制", "error");
-    return false;
+    ok = false;
   }
+  if (!ok) {
+    window.toast("复制失败，请手动选择文本复制", "error");
+  }
+  return ok;
 };
 
 // 客户端 Toast：派发 window 事件，由 base.html 的 toastHost 组件接收并渲染。

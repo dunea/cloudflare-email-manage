@@ -206,14 +206,16 @@
         this.open = false;
       },
       async copyOne(address, token, kind) {
-        const ok = await window.copyToClipboard(this.single(address, token, kind));
+        const ok = await window.copyToClipboard(
+          window.mailLink.single(address, token, kind)
+        );
         if (ok) {
-          window.toast(kind === "txt" ? "已复制纯文本链接" : "已复制 HTML 链接", "success");
+          window.toast(
+            kind === "txt" ? "已复制纯文本链接" : "已复制 HTML 链接",
+            "success"
+          );
         }
         this.close();
-      },
-      single(address, token, kind) {
-        return window.mailLink.single(address, token, kind);
       },
     }));
 
