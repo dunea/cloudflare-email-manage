@@ -106,3 +106,19 @@ async def delete_email_address(
     )
     await email_service.delete_email_address(session, email_address)
     return ApiResponse(message="已删除")
+
+
+@router.post(
+    "/{email_address_id}/reset-token",
+    response_model=ApiResponse[EmailAddressRead],
+    summary="重置公开查询令牌",
+)
+async def reset_public_token(
+    email_address_id: int, current_user: CurrentUser, session: SessionDep
+) -> ApiResponse[EmailAddressRead]:
+    """重置邮箱地址的公开查询令牌，旧 /mail/{token} 链接立即失效。"""
+    email_address = await email_service.get_email_address_or_404(
+        session, email_address_id, current_user
+    )
+    updated = await email_service.regenerate_public_token(session, email_address)
+    return ApiResponse(data=EmailAddressRead.model_validate(updated), message="已重置查询链接")

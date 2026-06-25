@@ -49,6 +49,19 @@
 {% endif %}
 
 {% if addresses %}
+<!-- 批量操作 -->
+<div x-data="batchLinks()" class="mb-4 flex items-center gap-3">
+  <button type="button" @click="openDialog('copy')"
+          class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+    复制全部链接
+  </button>
+  <button type="button" @click="openDialog('download')"
+          class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+    下载全部链接
+  </button>
+  <span class="text-xs text-slate-400">格式：邮件地址----完整查询链接</span>
+</div>
+
 <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
   <table class="w-full text-sm">
     <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
@@ -56,6 +69,7 @@
         <th class="px-4 py-3">邮箱地址</th>
         <th class="px-4 py-3">状态</th>
         <th class="px-4 py-3">创建时间</th>
+        <th class="px-4 py-3">查询链接</th>
         <th class="px-4 py-3 text-right">操作</th>
       </tr>
     </thead>
@@ -66,9 +80,27 @@
         <td class="px-4 py-3">{% if a.is_active %}{{ badge("启用", "green") }}{% else %}{{ badge("停用", "slate") }}{% endif %}</td>
         <td class="px-4 py-3 text-slate-400">{{ a.created_at | dt }}</td>
         <td class="px-4 py-3">
+          <div class="flex items-center gap-3 text-xs">
+            <a href="/mail/{{ a.public_token }}" target="_blank" rel="noopener noreferrer"
+               class="font-medium text-brand hover:underline">HTML</a>
+            <a href="/mail/{{ a.public_token }}.txt" target="_blank" rel="noopener noreferrer"
+               class="font-medium text-brand hover:underline">TXT</a>
+            <button type="button"
+                    @click="copyOne('{{ a.full_address }}', '{{ a.public_token }}', 'html', $el)"
+                    class="text-slate-500 hover:text-brand">复制HTML</button>
+            <button type="button"
+                    @click="copyOne('{{ a.full_address }}', '{{ a.public_token }}', 'txt', $el)"
+                    class="text-slate-500 hover:text-brand">复制TXT</button>
+          </div>
+        </td>
+        <td class="px-4 py-3">
           <div class="flex items-center justify-end gap-3">
             <form method="post" action="/email-addresses/{{ a.id }}/toggle">
               <button type="submit" class="text-sm font-medium text-brand hover:underline">{{ "停用" if a.is_active else "启用" }}</button>
+            </form>
+            <form method="post" action="/email-addresses/{{ a.id }}/reset-token"
+                  x-data @submit.prevent="$store.confirm.ask($el, '重置后旧查询链接立即失效，确定继续？')">
+              <button type="submit" class="text-sm font-medium text-amber-600 hover:underline">重置链接</button>
             </form>
             <form method="post" action="/email-addresses/{{ a.id }}/delete"
                   x-data @submit.prevent="$store.confirm.ask($el, '确定删除该邮箱地址？')">
@@ -82,6 +114,115 @@
   </table>
 </div>
 {{ pagination(page, size, total, "/email-addresses") }}
+
+<!-- 邮箱数据（供批量操作构造链接） -->
+<script type="application/json" id="email-address-data">[
+  {% for a in addresses %}{"address":"{{ a.full_address }}","token":"{{ a.public_token }}"}{% if not loop.last %},{% endif %}{% endfor %}
+]</script>
+
+<!-- 批量操作选择弹窗 -->
+<div x-data x-cloak x-show="linkDialog.open"
+     class="fixed inset-0 z-[85] flex items-center justify-center p-4"
+     @keydown.escape.window="linkDialog.close()">
+  <div class="absolute inset-0 bg-slate-900/50" @click="linkDialog.close()"></div>
+  <div x-show="linkDialog.open" x-transition
+       class="relative w-full max-w-sm rounded-xl bg-white p-6 shadow-xl">
+    <h3 class="text-base font-semibold text-slate-900">选择链接格式</h3>
+    <p class="mt-2 text-sm text-slate-600" x-text="linkDialog.actionText"></p>
+    <div class="mt-5 flex flex-col gap-3">
+      <button type="button" @click="linkDialog.confirm('txt')"
+              class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">
+        纯文本查询链接（.txt）
+      </button>
+      <button type="button" @click="linkDialog.confirm('html')"
+              class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">
+        HTML 页面查询链接
+      </button>
+      <button type="button" @click="linkDialog.close()"
+              class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+        取消
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // 邮箱地址批量链接操作：复制 / 下载，支持纯文本链接与 HTML 链接两种格式。
+  // 格式：邮件地址----完整查询链接，换行分隔；下载文件名：数量_时间.txt。
+  document.addEventListener("alpine:init", () => {
+    // 读取当前页邮箱数据
+    const raw = document.getElementById("email-address-data");
+    const items = raw ? JSON.parse(raw.textContent) : [];
+    const origin = window.location.origin;
+
+    // 构造单条链接
+    function buildLink(item, kind) {
+      // kind === 'html' → HTML 页面链接；'txt' → 纯文本链接
+      const suffix = kind === "txt" ? ".txt" : "";
+      return item.address + "----" + origin + "/mail/" + item.token + suffix;
+    }
+
+    // 构造全部行
+    function buildAll(kind) {
+      return items.map((it) => buildLink(it, kind)).join("\n");
+    }
+
+    // Alpine 组件：单行复制按钮
+    Alpine.data("batchLinks", () => ({
+      openDialog(action) {
+        window.linkDialog.open(action);
+      },
+      copyOne(address, token, kind, btn) {
+        const link = buildLink({ address: address, token: token }, kind);
+        window.copyToClipboard(link, btn);
+      },
+    }));
+
+    // 全局单例 store：弹窗状态与回调
+    window.linkDialog = {
+      open: false,
+      action: null, // 'copy' | 'download'
+      actionText: "",
+      _resolve: null,
+      open(action) {
+        this.action = action;
+        this.actionText =
+          action === "copy" ? "复制全部链接到剪贴板" : "下载为 txt 文件";
+        this.open = true;
+      },
+      close() {
+        this.open = false;
+        this.action = null;
+      },
+      async confirm(kind) {
+        const action = this.action;
+        this.close();
+        if (action === "copy") {
+          await window.copyToClipboard(buildAll(kind));
+          window.toast("已复制 " + items.length + " 条链接", "success");
+        } else {
+          const content = buildAll(kind);
+          const now = new Date();
+          const pad = (n) => String(n).padStart(2, "0");
+          const ts =
+            now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) +
+            "_" + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
+          const filename = items.length + "_" + ts + ".txt";
+          const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          window.toast("已下载 " + filename, "success");
+        }
+      },
+    };
+  });
+</script>
 {% else %}
 {{ empty_state("还没有邮箱地址。使用上方表单创建第一个吧。") }}
 {% endif %}

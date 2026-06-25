@@ -105,3 +105,16 @@ async def list_inbound_emails(
         base.order_by(InboundEmail.id.desc()).offset((page - 1) * size).limit(size)
     )
     return list(result.scalars().all()), total
+
+
+async def get_latest_inbound_by_address(
+    session: AsyncSession, full_address: str
+) -> InboundEmail | None:
+    """按收件地址取最新一封邮件（按 received_at / id 倒序）。"""
+    stmt = (
+        select(InboundEmail)
+        .where(InboundEmail.to_address == full_address)
+        .order_by(InboundEmail.received_at.desc(), InboundEmail.id.desc())
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()

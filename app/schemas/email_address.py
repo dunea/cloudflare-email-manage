@@ -37,5 +37,7 @@ class EmailAddressRead(BaseModel):
     user_id: int
     local_part: str
     full_address: str
+    # 公开查询令牌（无符号 uuid），用于构造 /mail/{token} 链接
+    public_token: str
     is_active: bool
     created_at: datetime

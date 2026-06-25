@@ -18,6 +18,7 @@ from app.web import (
     inbound,
     outbound,
     profile,
+    public_mail,
     seo,
 )
 
@@ -34,6 +35,7 @@ web_router.include_router(outbound.router)
 web_router.include_router(api_keys.router)
 web_router.include_router(profile.router)
 web_router.include_router(admin.router)
+web_router.include_router(public_mail.router)
 web_router.include_router(seo.router)
 
 __all__ = ["web_router"]

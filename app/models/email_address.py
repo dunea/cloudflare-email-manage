@@ -28,6 +28,8 @@ class EmailAddress(Base):
     local_part: Mapped[str] = mapped_column(String(128))
     # 完整地址，例如 hello@example.com
     full_address: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    # 公开查询令牌（uuid4().hex，无连字符），用于 /mail/{token} 无鉴权访问最新邮件
+    public_token: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
