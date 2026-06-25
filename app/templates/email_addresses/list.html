@@ -7,7 +7,6 @@
   <p class="mt-1 text-sm text-slate-500">在你的域名下创建邮箱地址，用于接收与发送邮件</p>
 </div>
 
-<!-- 创建表单 -->
 {% if domains %}
 <form method="post" action="/email-addresses"
       class="mb-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -34,7 +33,6 @@
 </div>
 {% endif %}
 
-<!-- 过滤 + 批量操作（同一行：左过滤，右批量按钮） -->
 {% if domains %}
 <div class="mb-4 flex flex-wrap items-center justify-between gap-3 text-sm">
   <form method="get" action="/email-addresses" class="flex items-center gap-2">
@@ -47,16 +45,46 @@
       {% endfor %}
     </select>
   </form>
-  {% if addresses %}
-  <div x-data="batchLinks()" class="flex items-center gap-3">
-    <button type="button" @click="openDialog('copy')"
-            class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
-      复制全部链接
-    </button>
-    <button type="button" @click="openDialog('download')"
-            class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
-      下载全部链接
-    </button>
+  {% if total %}
+  <div class="flex items-center gap-3">
+    <div x-data="linkDropdown('copy')" class="relative" @click.outside="close()" @keydown.escape.window="close()">
+      <button type="button" @click="toggle($el)"
+              class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+        复制链接 <span class="ml-1 text-[10px] transition-transform inline-block" :class="open && 'rotate-180'">▼</span>
+      </button>
+      <div x-show="open" x-cloak x-transition :style="menuStyle"
+           class="fixed z-[60] w-64 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 text-left shadow-lg">
+        <template x-for="opt in options" :key="opt.key">
+          <div>
+            <button type="button" @click="run(opt)"
+                    :disabled="busy"
+                    class="block w-full px-4 py-2 text-left text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+              <span x-text="opt.label"></span>
+            </button>
+            <div x-show="opt.dividerAfter" class="my-1 border-t border-slate-100"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+    <div x-data="linkDropdown('download')" class="relative" @click.outside="close()" @keydown.escape.window="close()">
+      <button type="button" @click="toggle($el)"
+              class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+        下载链接 <span class="ml-1 text-[10px] transition-transform inline-block" :class="open && 'rotate-180'">▼</span>
+      </button>
+      <div x-show="open" x-cloak x-transition :style="menuStyle"
+           class="fixed z-[60] w-64 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 text-left shadow-lg">
+        <template x-for="opt in options" :key="opt.key">
+          <div>
+            <button type="button" @click="run(opt)"
+                    :disabled="busy"
+                    class="block w-full px-4 py-2 text-left text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+              <span x-text="opt.label"></span>
+            </button>
+            <div x-show="opt.dividerAfter" class="my-1 border-t border-slate-100"></div>
+          </div>
+        </template>
+      </div>
+    </div>
   </div>
   {% endif %}
 </div>
@@ -85,7 +113,6 @@
                     class="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900">
               操作 <span class="text-[10px] transition-transform" :class="open && 'rotate-180'">▼</span>
             </button>
-            <!-- 下拉菜单：fixed 定位避免被 overflow-x-auto 裁剪 -->
             <div x-show="open" x-cloak x-transition
                  :style="menuStyle"
                  @keydown.escape.window="close()"
@@ -122,71 +149,120 @@
 </div>
 {{ pagination(page, size, total, "/email-addresses") }}
 
-<!-- 邮箱数据（供批量操作构造链接） -->
 <script type="application/json" id="email-address-data">[
-  {% for a in addresses %}{"address":"{{ a.full_address }}","token":"{{ a.public_token }}"}{% if not loop.last %},{% endif %}{% endfor %}
+  {% for a in addresses %}{"address":{{ a.full_address | tojson }},"token":{{ a.public_token | tojson }}}{% if not loop.last %},{% endif %}{% endfor %}
 ]</script>
 
-<!-- 批量操作选择弹窗 -->
-<div x-data x-cloak x-show="$store.linkDialog.visible"
-     class="fixed inset-0 z-[85] flex items-center justify-center p-4"
-     @keydown.escape.window="$store.linkDialog.close()">
-  <div class="absolute inset-0 bg-slate-900/50" @click="$store.linkDialog.close()"></div>
-  <div x-show="$store.linkDialog.visible" x-transition
-       class="relative w-full max-w-sm rounded-xl bg-white p-6 shadow-xl">
-    <h3 class="text-base font-semibold text-slate-900">选择链接格式</h3>
-    <p class="mt-2 text-sm text-slate-600" x-text="$store.linkDialog.actionText"></p>
-    <div class="mt-5 flex flex-col gap-3">
-      <button type="button" @click="$store.linkDialog.confirm('txt')"
-              class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">
-        纯文本查询链接（.txt）
-      </button>
-      <button type="button" @click="$store.linkDialog.confirm('html')"
-              class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">
-        HTML 页面查询链接
-      </button>
-      <button type="button" @click="$store.linkDialog.close()"
-              class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
-        取消
-      </button>
-    </div>
-  </div>
-</div>
-
 <script>
-  // 邮箱地址链接操作：单行复制 + 批量复制/下载，支持纯文本与 HTML 两种格式。
-  // 格式：邮件地址----完整查询链接，换行分隔；下载文件名：数量_时间.txt。
   document.addEventListener("alpine:init", () => {
-    // 读取当前页邮箱数据
     const raw = document.getElementById("email-address-data");
-    const items = raw ? JSON.parse(raw.textContent) : [];
-    const origin = window.location.origin;
+    const currentItems = raw ? JSON.parse(raw.textContent) : [];
+    const meta = {
+      currentPage: {{ page }},
+      pageSize: {{ size }},
+      total: {{ total }},
+      domainId: {{ domain_id | tojson }},
+      origin: window.location.origin,
+    };
+    const MAX_FETCH = 500;
 
-    // 构造单条链接：kind === 'html' → HTML 页面链接；'txt' → 纯文本链接
     function buildLink(item, kind) {
       const suffix = kind === "txt" ? ".txt" : "";
-      return item.address + "----" + origin + "/mail/" + item.token + suffix;
+      return item.address + "----" + meta.origin + "/mail/" + item.token + suffix;
     }
 
-    // 构造全部行
-    function buildAll(kind) {
-      return items.map((it) => buildLink(it, kind)).join("\n");
-    }
-
-    // 全局链接工具：供行内复制与批量弹窗共用
-    window.mailLink = {
+    window.mailLinks = {
       single(address, token, kind) {
         return buildLink({ address: address, token: token }, kind);
       },
-      all(kind) {
-        return buildAll(kind);
+      async fetchAddresses(scope) {
+        if (scope === "current_page") {
+          return currentItems.slice();
+        }
+        const size = this._sizeFor(scope);
+        const order = this._orderFor(scope);
+        const url = new URL("/email-addresses/links", window.location.origin);
+        url.searchParams.set("size", String(size));
+        url.searchParams.set("order", order);
+        if (meta.domainId !== null && meta.domainId !== undefined) {
+          url.searchParams.set("domain_id", String(meta.domainId));
+        }
+        const resp = await fetch(url, { credentials: "same-origin" });
+        if (!resp.ok) {
+          throw new Error("请求失败 " + resp.status);
+        }
+        const json = await resp.json();
+        return (json.items || []).map((a) => ({
+          address: a.address,
+          token: a.token,
+        }));
       },
-      count() {
-        return items.length;
+      _sizeFor(scope) {
+        if (scope === "up_to_current") {
+          return Math.min(meta.currentPage * meta.pageSize, MAX_FETCH);
+        }
+        if (scope === "latest_100") return 100;
+        if (scope === "latest_500") return 500;
+        return 0;
+      },
+      _orderFor(scope) {
+        if (scope === "latest_100" || scope === "latest_500") return "desc";
+        return "asc";
+      },
+      buildText(items, kind) {
+        return items.map((it) => buildLink(it, kind)).join("\n");
+      },
+      async run(action, scope, format) {
+        let items;
+        try {
+          items = await this.fetchAddresses(scope);
+        } catch (err) {
+          window.toast("操作失败：" + (err.message || "请稍后重试"), "error");
+          return;
+        }
+        if (items.length === 0) {
+          window.toast("没有可" + (action === "copy" ? "复制" : "下载") + "的链接", "warning");
+          return;
+        }
+        const text = this.buildText(items, format);
+        const expectedCount =
+          scope === "up_to_current" ? meta.currentPage * meta.pageSize : items.length;
+        const truncated =
+          scope === "up_to_current" &&
+          expectedCount > MAX_FETCH &&
+          items.length < expectedCount;
+        if (action === "copy") {
+          const ok = await window.copyToClipboard(text);
+          if (ok) {
+            const msg = truncated
+              ? "已复制 " + items.length + " 条链接（已截断至 " + MAX_FETCH + " 条上限）"
+              : "已复制 " + items.length + " 条链接";
+            window.toast(msg, "success");
+          }
+        } else {
+          const now = new Date();
+          const pad = (n) => String(n).padStart(2, "0");
+          const ts =
+            now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) +
+            "_" + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
+          const filename = scope + "_" + ts + ".txt";
+          const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          const msg = truncated
+            ? "已下载 " + filename + "（" + items.length + " 条，已截断至 " + MAX_FETCH + " 条上限）"
+            : "已下载 " + filename + "（" + items.length + " 条）";
+          window.toast(msg, "success");
+        }
       },
     };
 
-    // 行内「操作」下拉组件：fixed 定位避开 overflow-x-auto 裁剪
     Alpine.data("rowMenu", () => ({
       open: false,
       menuStyle: "",
@@ -196,7 +272,6 @@
           return;
         }
         const r = btn.getBoundingClientRect();
-        // 菜单右边缘对齐按钮右边缘，位于按钮下方
         this.menuStyle =
           "top:" + (r.bottom + 4) + "px;right:" +
           (window.innerWidth - r.right) + "px;";
@@ -207,7 +282,7 @@
       },
       async copyOne(address, token, kind) {
         const ok = await window.copyToClipboard(
-          window.mailLink.single(address, token, kind)
+          window.mailLinks.single(address, token, kind)
         );
         if (ok) {
           window.toast(
@@ -219,57 +294,62 @@
       },
     }));
 
-    // 批量操作组件：仅负责打开格式选择弹窗
-    Alpine.data("batchLinks", () => ({
-      openDialog(action) {
-        Alpine.store("linkDialog").show(action);
+    Alpine.data("linkDropdown", (action) => ({
+      open: false,
+      busy: false,
+      menuStyle: "",
+      action: action,
+      get options() {
+        const verb = this.action === "copy" ? "复制" : "下载";
+        const scopeLabels = {
+          current_page: "当前页",
+          up_to_current: "当前与之前页",
+          latest_100: "近 100 条",
+          latest_500: "近 500 条",
+        };
+        const formatLabels = { html: "HTML 链接", txt: "纯文本链接" };
+        const order = ["current_page", "up_to_current", "latest_100", "latest_500"];
+        const result = [];
+        order.forEach((scope, i) => {
+          const isLastScope = i === order.length - 1;
+          ["html", "txt"].forEach((format, j) => {
+            const isLastFormat = j === 1;
+            result.push({
+              key: scope + "_" + format,
+              label: verb + scopeLabels[scope] + "（" + formatLabels[format] + "）",
+              scope: scope,
+              format: format,
+              dividerAfter: isLastFormat && !isLastScope,
+            });
+          });
+        });
+        return result;
       },
-    }));
-
-    // 全局单例：批量格式选择弹窗状态与回调
-    Alpine.store("linkDialog", {
-      visible: false,
-      action: null, // 'copy' | 'download'
-      actionText: "",
-      show(action) {
-        this.action = action;
-        this.actionText =
-          action === "copy" ? "复制全部链接到剪贴板" : "下载为 txt 文件";
-        this.visible = true;
+      toggle(btn) {
+        if (this.open) {
+          this.close();
+          return;
+        }
+        const r = btn.getBoundingClientRect();
+        this.menuStyle =
+          "top:" + (r.bottom + 4) + "px;right:" +
+          (window.innerWidth - r.right) + "px;";
+        this.open = true;
       },
       close() {
-        this.visible = false;
-        this.action = null;
+        this.open = false;
       },
-      async confirm(kind) {
-        const action = this.action;
+      async run(opt) {
+        if (this.busy) return;
+        this.busy = true;
         this.close();
-        if (action === "copy") {
-          const ok = await window.copyToClipboard(window.mailLink.all(kind));
-          if (ok) {
-            window.toast("已复制 " + window.mailLink.count() + " 条链接", "success");
-          }
-        } else {
-          const content = window.mailLink.all(kind);
-          const now = new Date();
-          const pad = (n) => String(n).padStart(2, "0");
-          const ts =
-            now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) +
-            "_" + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
-          const filename = window.mailLink.count() + "_" + ts + ".txt";
-          const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = filename;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-          window.toast("已下载 " + filename, "success");
+        try {
+          await window.mailLinks.run(this.action, opt.scope, opt.format);
+        } finally {
+          this.busy = false;
         }
       },
-    });
+    }));
   });
 </script>
 {% else %}

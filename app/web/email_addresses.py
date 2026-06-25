@@ -3,10 +3,10 @@
 复用 app/services/email_service 与 domain_service。
 """
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Form, Query, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import ValidationError
 
 from app.dependencies import SessionDep
@@ -24,26 +24,28 @@ from app.web.templating import error_message, flash, render
 router = APIRouter(tags=["前端-邮箱地址"])
 
 
+def _parse_domain_id(domain_id: str | None) -> int | None:
+    """兼容前端"全部域名"提交的空字符串：空值不过滤，非法值忽略，否则取 >=1 的整数。"""
+    if not domain_id:
+        return None
+    try:
+        value = int(domain_id)
+    except ValueError:
+        return None
+    return value if value >= 1 else None
+
+
 @router.get("/email-addresses")
 async def list_email_addresses(
     request: Request,
     user: CurrentWebUser,
     session: SessionDep,
     page: int = Query(default=1, ge=1),
-    size: int = Query(default=20, ge=1, le=100),
+    size: int = Query(default=25, ge=1, le=500),
     domain_id: str | None = Query(default=None),
 ) -> Response:
     """邮箱地址列表（可按域名过滤），并内置创建表单。"""
-    # 兼容前端"全部域名"提交的空字符串，空值视为不过滤；
-    # 非空值必须为 >= 1 的整数，否则忽略过滤
-    parsed_domain_id: int | None = None
-    if domain_id:
-        try:
-            value = int(domain_id)
-        except ValueError:
-            value = None
-        if value is not None and value >= 1:
-            parsed_domain_id = value
+    parsed_domain_id = _parse_domain_id(domain_id)
     addresses, total = await email_service.list_email_addresses(
         session, user, page, size, parsed_domain_id
     )
@@ -59,6 +61,35 @@ async def list_email_addresses(
         size=size,
         total=total,
         domain_id=parsed_domain_id,
+    )
+
+
+@router.get("/email-addresses/links")
+async def email_address_links(
+    user: CurrentWebUser,
+    session: SessionDep,
+    size: int = Query(default=25, ge=1, le=500),
+    domain_id: str | None = Query(default=None),
+    order: Literal["asc", "desc"] = Query(default="asc"),
+) -> JSONResponse:
+    """供前端批量复制/下载下拉拉取邮箱地址（Cookie 鉴权）。
+
+    返回从第 1 页起、按 order 排序、最多 size 条的地址与公开令牌。
+    与 /api/v1/email-addresses 不同，本端点使用 Web 会话 Cookie 鉴权，
+    供页面内 JS（无法读取 HttpOnly 令牌）直接 fetch。
+    """
+    parsed_domain_id = _parse_domain_id(domain_id)
+    addresses, total = await email_service.list_email_addresses(
+        session, user, 1, size, parsed_domain_id, order
+    )
+    return JSONResponse(
+        {
+            "items": [
+                {"address": a.full_address, "token": a.public_token}
+                for a in addresses
+            ],
+            "total": total,
+        }
     )
 
 

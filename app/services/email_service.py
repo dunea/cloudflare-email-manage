@@ -84,8 +84,12 @@ async def list_email_addresses(
     page: int,
     size: int,
     domain_id: int | None = None,
+    order: str = "asc",
 ) -> tuple[list[EmailAddress], int]:
-    """分页查询邮箱地址；管理员查询全部，可按域名过滤。"""
+    """分页查询邮箱地址;管理员查询全部,可按域名过滤、按 id 排序。
+
+    order: "asc"(默认,最旧在前)/ "desc"(最新在前,用于「近 N 条」批量复制/下载)。
+    """
     base = select(EmailAddress).where(EmailAddress.is_deleted.is_(False))
     if user.role != "admin":
         base = base.where(EmailAddress.user_id == user.id)
@@ -96,8 +100,12 @@ async def list_email_addresses(
         await session.execute(select(func.count()).select_from(base.subquery()))
     ).scalar_one()
 
+    if order == "desc":
+        ordered = base.order_by(EmailAddress.id.desc())
+    else:
+        ordered = base.order_by(EmailAddress.id)
     result = await session.execute(
-        base.order_by(EmailAddress.id).offset((page - 1) * size).limit(size)
+        ordered.offset((page - 1) * size).limit(size)
     )
     return list(result.scalars().all()), total
 

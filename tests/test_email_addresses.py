@@ -195,6 +195,91 @@ async def test_list_email_addresses(
     assert resp.json()["data"]["total"] == 3
 
 
+async def test_list_default_size_is_25(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """API 默认 size 为 25,超出的部分按分页截断。"""
+    token = await _register_and_login(client)
+    domain_id = await _setup_domain(client, token, monkeypatch)
+    for i in range(30):
+        await client.post(
+            "/api/v1/email-addresses",
+            headers=_auth(token),
+            json={"domain_id": domain_id, "local_part": f"u{i:02d}"},
+        )
+
+    resp = await client.get("/api/v1/email-addresses", headers=_auth(token))
+    data = resp.json()["data"]
+    assert resp.status_code == 200
+    assert data["size"] == 25
+    assert data["page"] == 1
+    assert data["total"] == 30
+    assert len(data["items"]) == 25
+
+
+async def test_list_order_desc(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """order=desc 返回 id 倒序，用于「近 N 条」批量复制/下载。"""
+    token = await _register_and_login(client)
+    domain_id = await _setup_domain(client, token, monkeypatch)
+    for local in ("a", "b", "c"):
+        await client.post(
+            "/api/v1/email-addresses",
+            headers=_auth(token),
+            json={"domain_id": domain_id, "local_part": local},
+        )
+
+    resp = await client.get(
+        "/api/v1/email-addresses",
+        params={"order": "desc", "size": 10},
+        headers=_auth(token),
+    )
+    items = resp.json()["data"]["items"]
+    ids = [item["id"] for item in items]
+    assert ids == sorted(ids, reverse=True)
+
+
+async def test_list_size_max_500(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """size 上限提升到 500,超过应返回 422 校验错误。"""
+    token = await _register_and_login(client)
+    domain_id = await _setup_domain(client, token, monkeypatch)
+    await client.post(
+        "/api/v1/email-addresses",
+        headers=_auth(token),
+        json={"domain_id": domain_id, "local_part": "a"},
+    )
+
+    resp = await client.get(
+        "/api/v1/email-addresses",
+        params={"size": 501},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 422
+
+
+async def test_list_invalid_order_rejected(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """order 必须是 asc 或 desc,非法值返回 422。"""
+    token = await _register_and_login(client)
+    domain_id = await _setup_domain(client, token, monkeypatch)
+    await client.post(
+        "/api/v1/email-addresses",
+        headers=_auth(token),
+        json={"domain_id": domain_id, "local_part": "a"},
+    )
+
+    resp = await client.get(
+        "/api/v1/email-addresses",
+        params={"order": "random"},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 422
+
+
 async def test_list_filter_by_domain(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
