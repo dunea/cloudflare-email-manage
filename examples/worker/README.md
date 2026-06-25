@@ -117,7 +117,7 @@ npx wrangler tail
 
 ```bash
 # 计算签名（需要与平台 .env 中的 CF_WEBHOOK_SECRET 一致）
-SECRET="29135d04-7cf8-4427-9788-630732ac4ef8"
+SECRET="<your-cf-webhook-secret>"
 BODY='{"to":"hello@example.com","from":"test@gmail.com","subject":"测试","text":"正文","html":"<p>正文</p>"}'
 SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/.* //')
 
@@ -129,7 +129,7 @@ curl -X POST http://localhost:8000/api/v1/inbound/webhook \
 
 > Windows PowerShell 可用：
 > ```powershell
-> $secret = "29135d04-7cf8-4427-9788-630732ac4ef8"
+> $secret = "<your-cf-webhook-secret>"
 > $body = '{"to":"hello@example.com","from":"test@gmail.com","subject":"测试","text":"正文"}'
 > $hmac = New-Object System.Security.Cryptography.HMACSHA256
 > $hmac.Key = [Text.Encoding]::UTF8.GetBytes($secret)

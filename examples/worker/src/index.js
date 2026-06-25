@@ -104,14 +104,17 @@ export default {
       });
 
       if (!resp.ok) {
+        const text = await resp.text().catch(() => "");
         console.error(
           `Webhook 返回非 2xx: ${resp.status} ${resp.statusText}`,
+          text,
         );
-        const text = await resp.text().catch(() => "");
-        console.error("响应体:", text);
+        message.setReject(`Webhook 投递失败: ${resp.status}`);
+        return;
       }
     } catch (err) {
       console.error("Webhook 请求失败:", err);
+      message.setReject("Webhook 请求失败");
     }
   },
 };

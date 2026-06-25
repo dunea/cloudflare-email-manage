@@ -19,6 +19,27 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    """将存量邮箱地址与收件邮件地址统一规范化为小写。
+
+    执行前先检测大小写冲突（如 Hello@x.com 与 hello@x.com 并存），
+    有冲突则报错提示手动解决，避免 lower() 后违反唯一约束。
+    """
+    bind = op.get_bind()
+    collisions = bind.execute(
+        sa.text(
+            "SELECT lower(full_address) "
+            "FROM email_address "
+            "GROUP BY lower(full_address) "
+            "HAVING count(*) > 1"
+        )
+    ).fetchall()
+    if collisions:
+        raise RuntimeError(
+            "存在大小写冲突的 email_address.full_address 记录，"
+            "请手动合并后再执行迁移: "
+            + ", ".join(row[0] for row in collisions)
+        )
+
     # 将存量邮箱地址统一转为小写，与代码层规范化保持一致
     op.execute(
         sa.text(
@@ -38,5 +59,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # 大小写规范化不可逆，downgrade 不恢复原始大小写
+    """大小写规范化不可逆，保留空实现。"""
     pass

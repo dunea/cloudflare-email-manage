@@ -273,3 +273,12 @@ async def test_webhook_normalizes_to_address_case(
     listing = await client.get("/api/v1/inbound", headers=_auth(token))
     assert listing.status_code == 200
     assert listing.json()["data"]["total"] == 1
+
+    # 大小写不敏感的 to_address 过滤也应匹配
+    filtered = await client.get(
+        "/api/v1/inbound",
+        headers=_auth(token),
+        params={"to_address": "HELLO@example.com"},
+    )
+    assert filtered.status_code == 200
+    assert filtered.json()["data"]["total"] == 1
