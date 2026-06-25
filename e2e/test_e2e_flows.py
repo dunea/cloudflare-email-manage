@@ -170,11 +170,12 @@ def test_email_addresses_dropdown_contains_all_options(
     expect(page.get_by_text("下载近 500 条（纯文本链接）")).to_be_visible()
     page.locator("body").click(position={"x": 5, "y": 5})
 
-    # 实际点击跨页作用域「近 500 条」：触发 /email-addresses/links fetch。
-    # 断言响应 200（Cookie 鉴权可用），防止 401 类鉴权回归。
     page.get_by_role("button", name="复制链接").click()
     with page.expect_response(
         lambda r: "/email-addresses/links" in r.url
     ) as resp_info:
         page.get_by_text("复制近 500 条（纯文本链接）").click()
-    assert resp_info.value.status == 200
+    response = resp_info.value
+    assert response.status == 200
+    assert "size=500" in response.url
+    assert "order=desc" in response.url

@@ -150,7 +150,7 @@
 {{ pagination(page, size, total, "/email-addresses") }}
 
 <script type="application/json" id="email-address-data">[
-  {% for a in addresses %}{"address":"{{ a.full_address }}","token":"{{ a.public_token }}"}{% if not loop.last %},{% endif %}{% endfor %}
+  {% for a in addresses %}{"address":{{ a.full_address | tojson }},"token":{{ a.public_token | tojson }}}{% if not loop.last %},{% endif %}{% endfor %}
 ]</script>
 
 <script>
@@ -225,10 +225,19 @@
           return;
         }
         const text = this.buildText(items, format);
+        const expectedCount =
+          scope === "up_to_current" ? meta.currentPage * meta.pageSize : items.length;
+        const truncated =
+          scope === "up_to_current" &&
+          expectedCount > MAX_FETCH &&
+          items.length < expectedCount;
         if (action === "copy") {
           const ok = await window.copyToClipboard(text);
           if (ok) {
-            window.toast("已复制 " + items.length + " 条链接", "success");
+            const msg = truncated
+              ? "已复制 " + items.length + " 条链接（已截断至 " + MAX_FETCH + " 条上限）"
+              : "已复制 " + items.length + " 条链接";
+            window.toast(msg, "success");
           }
         } else {
           const now = new Date();
@@ -246,10 +255,6 @@
           a.click();
           document.body.removeChild(a);
           URL.revokeObjectURL(url);
-          const truncated =
-            scope === "up_to_current" &&
-            meta.currentPage * meta.pageSize > MAX_FETCH &&
-            items.length < meta.currentPage * meta.pageSize;
           const msg = truncated
             ? "已下载 " + filename + "（" + items.length + " 条，已截断至 " + MAX_FETCH + " 条上限）"
             : "已下载 " + filename + "（" + items.length + " 条）";
