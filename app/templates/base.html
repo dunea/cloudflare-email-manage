@@ -196,16 +196,7 @@
   <!-- 全局浮层：服务端 flash（toast 卡片）+ 客户端 toast -->
   <div class="pointer-events-none fixed right-4 top-4 z-[70] flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2">
     {% include "components/flash.html" %}
-    <div x-data="toastHost()">
-      <template x-for="t in items" :key="t.id">
-        <div x-show="t.show" x-transition.opacity
-             class="pointer-events-auto mb-2 flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-sm shadow-lg"
-             :class="styles[t.category] || styles.info">
-          <span x-text="t.message"></span>
-          <button type="button" @click="remove(t.id)" class="opacity-60 hover:opacity-100">✕</button>
-        </div>
-      </template>
-    </div>
+    <div id="client-toast-host"></div>
   </div>
 
   <!-- 全局确认弹窗（替代浏览器原生 confirm） -->

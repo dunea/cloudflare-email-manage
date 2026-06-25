@@ -117,3 +117,21 @@ async def delete_email_address(
     await email_service.delete_email_address(session, email)
     flash(request, "已删除邮箱地址", "success")
     return RedirectResponse("/email-addresses", status_code=303)
+
+
+@router.post("/email-addresses/{email_id:int}/reset-token")
+async def reset_public_token(
+    request: Request,
+    user: CurrentWebUser,
+    session: SessionDep,
+    email_id: int,
+) -> Response:
+    """重置邮箱地址的公开查询令牌（旧链接立即失效）。"""
+    try:
+        email = await email_service.get_email_address_or_404(session, email_id, user)
+    except NotFoundError:
+        flash(request, "邮箱地址不存在", "error")
+        return RedirectResponse("/email-addresses", status_code=303)
+    await email_service.regenerate_public_token(session, email)
+    flash(request, "已重置查询链接，旧链接已失效", "success")
+    return RedirectResponse("/email-addresses", status_code=303)

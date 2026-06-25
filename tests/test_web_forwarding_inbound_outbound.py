@@ -3,6 +3,8 @@
 CF 调用（create/delete routing rule、send_email）通过 monkeypatch 替换，不发真实请求。
 """
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -64,6 +66,7 @@ async def _seed_email(
         user_id=user_id,
         local_part=local,
         full_address=f"{local}@{domain_name}",
+        public_token=uuid.uuid4().hex,
         is_active=is_active,
     )
     db_session.add(addr)

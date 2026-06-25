@@ -4,6 +4,8 @@
 软删除后可通过再次创建复活同名地址。
 """
 
+import uuid
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +13,11 @@ from app.exceptions import AppException, NotFoundError
 from app.models import EmailAddress, User
 from app.schemas.email_address import EmailAddressCreate, EmailAddressUpdate
 from app.services import domain_service
+
+
+def _new_public_token() -> str:
+    """生成无符号 uuid（uuid4().hex，32 位十六进制）作为公开查询令牌。"""
+    return uuid.uuid4().hex
 
 
 async def create_email_address(
@@ -35,6 +42,9 @@ async def create_email_address(
         existing.user_id = user.id
         existing.domain_id = domain.id
         existing.local_part = data.local_part
+        # 复活时若缺少公开令牌则补一个
+        if not existing.public_token:
+            existing.public_token = _new_public_token()
         await session.commit()
         await session.refresh(existing)
         return existing
@@ -44,6 +54,7 @@ async def create_email_address(
         user_id=user.id,
         local_part=data.local_part,
         full_address=full_address,
+        public_token=_new_public_token(),
     )
     session.add(email_address)
     await session.commit()
@@ -109,3 +120,25 @@ async def delete_email_address(
     email_address.is_deleted = True
     email_address.is_active = False
     await session.commit()
+
+
+async def regenerate_public_token(
+    session: AsyncSession, email_address: EmailAddress
+) -> EmailAddress:
+    """重置邮箱地址的公开查询令牌（旧令牌立即失效）。"""
+    email_address.public_token = _new_public_token()
+    await session.commit()
+    await session.refresh(email_address)
+    return email_address
+
+
+async def get_email_address_by_token(
+    session: AsyncSession, token: str
+) -> EmailAddress | None:
+    """按公开令牌查询邮箱地址；要求未删除且启用。"""
+    stmt = select(EmailAddress).where(
+        EmailAddress.public_token == token,
+        EmailAddress.is_deleted.is_(False),
+        EmailAddress.is_active.is_(True),
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()

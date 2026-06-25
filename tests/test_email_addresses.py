@@ -105,6 +105,10 @@ async def test_create_email_address(
     assert data["local_part"] == "hello"
     assert data["is_active"] is True
     assert data["domain_id"] == domain_id
+    # 公开查询令牌：32 位无符号 uuid（uuid4().hex）
+    assert "public_token" in data
+    assert len(data["public_token"]) == 32
+    assert all(c in "0123456789abcdef" for c in data["public_token"])
 
 
 async def test_create_requires_auth(client: AsyncClient) -> None:
