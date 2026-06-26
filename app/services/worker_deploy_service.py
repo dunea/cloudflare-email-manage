@@ -25,7 +25,9 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+from ipaddress import ip_address
 from pathlib import Path
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,17 +61,27 @@ def _platform_webhook_url() -> str:
 
 
 def _validate_public_base_url() -> None:
-    """部署时校验 APP_BASE_URL 非 localhost/私有地址，避免静默破坏 Worker 回传。
+    """部署时校验 APP_BASE_URL 是公网可达的 HTTPS URL，避免静默破坏 Worker 回传。
 
-    本地开发（CF_FAKE_MODE=True 或 APP_BASE_URL 含 localhost）放行。
+    拒绝：localhost/回环/私有/链路本地 IP、http（非 https）、缺 hostname。
+    本地开发（CF_FAKE_MODE=True）放行。
     """
     if settings.CF_FAKE_MODE:
         return
-    base = settings.APP_BASE_URL.lower().strip()
-    if "localhost" in base or "127.0.0.1" in base or base.startswith("http://"):
+    parsed = urlparse(settings.APP_BASE_URL.strip())
+    host = parsed.hostname
+    is_bad = host is None or parsed.scheme != "https" or host.lower() == "localhost"
+    if not is_bad and host is not None:
+        try:
+            ip = ip_address(host)
+            is_bad = ip.is_private or ip.is_loopback or ip.is_link_local
+        except ValueError:
+            # 非 IP 字面量（域名），已通过上面的检查
+            is_bad = False
+    if is_bad:
         raise AppException(
-            "APP_BASE_URL 仍为本地地址（当前: "
-            f"{settings.APP_BASE_URL!r}），无法作为 Worker 回传地址。"
+            "APP_BASE_URL 不可用作 Worker 回传地址（当前: "
+            f"{settings.APP_BASE_URL!r}）。"
             "请在 .env 中配置公网可达的 HTTPS URL（如 https://your-domain.com）后重试。",
             code=1400,
         )

@@ -13,6 +13,8 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.models  # noqa: F401  确保模型注册
+from app.config import settings
+from app.exceptions import AppException
 from app.models import CFAccount, Domain, User
 from app.services.cloudflare import CloudflareClient
 from app.services.crypto import encrypt_token
@@ -386,3 +388,54 @@ async def test_web_deploy_worker_form_success(
     )
     assert resp.status_code == 303
     assert f"/cf-accounts/{cf_account.id}" in resp.headers["location"]
+
+
+# ---- APP_BASE_URL 校验 ----
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "http://localhost:8000",
+        "https://localhost",
+        "https://127.0.0.1",
+        "https://10.0.0.1",
+        "https://192.168.1.10",
+        "https://172.16.0.1",
+        "http://example.com",
+        "ftp://example.com",
+    ],
+)
+def test_validate_public_base_url_rejects_bad_urls(
+    monkeypatch: pytest.MonkeyPatch, bad_url: str
+) -> None:
+    """私有/回环 IP、http、缺 scheme/hostname 均被拒绝。"""
+    monkeypatch.setattr(settings, "APP_BASE_URL", bad_url)
+    monkeypatch.setattr(settings, "CF_FAKE_MODE", False)
+    with pytest.raises(AppException):
+        worker_deploy_service._validate_public_base_url()
+
+
+@pytest.mark.parametrize(
+    "good_url",
+    [
+        "https://your-domain.com",
+        "https://api.example.com",
+    ],
+)
+def test_validate_public_base_url_accepts_public_https(
+    monkeypatch: pytest.MonkeyPatch, good_url: str
+) -> None:
+    """公网 https URL 通过校验。"""
+    monkeypatch.setattr(settings, "APP_BASE_URL", good_url)
+    monkeypatch.setattr(settings, "CF_FAKE_MODE", False)
+    worker_deploy_service._validate_public_base_url()
+
+
+def test_validate_public_base_url_bypassed_in_fake_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CF_FAKE_MODE=True 时即使 localhost 也放行。"""
+    monkeypatch.setattr(settings, "APP_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr(settings, "CF_FAKE_MODE", True)
+    worker_deploy_service._validate_public_base_url()

@@ -436,3 +436,136 @@ async def test_webhook_domain_secret_case_insensitive(
         },
     )
     assert resp.status_code == 200
+
+
+# ---- _resolve_secret 针对性测试 ----
+
+
+async def test_resolve_secret_skips_null_secret_row(
+    db_session: AsyncSession,
+) -> None:
+    """_resolve_secret 跳过 webhook_secret 为 null 的行，fallback 全局密钥。"""
+    from app.services import inbound_service
+    from app.services.crypto import encrypt_token
+
+    # 建两个同名域名：一个 secret=null（应跳过），另一个 secret="kept"
+    user = User(
+        username="resuser1",
+        email="r1@test.local",
+        hashed_password="x",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    cf_account = CFAccount(
+        user_id=user.id,
+        name="t",
+        encrypted_api_token=encrypt_token("tok"),
+        account_id="acc-1",
+    )
+    db_session.add(cf_account)
+    await db_session.flush()
+    d_null = Domain(
+        cf_account_id=cf_account.id,
+        zone_id="z1",
+        domain_name="dup.com",
+        status="active",
+        webhook_secret=None,
+    )
+    db_session.add(d_null)
+    await db_session.flush()
+    d_kept = Domain(
+        cf_account_id=cf_account.id,
+        zone_id="z2",
+        domain_name="dup.com",
+        status="active",
+        webhook_secret="kept-secret",
+    )
+    db_session.add(d_kept)
+    await db_session.commit()
+
+    secret = await inbound_service._resolve_secret(db_session, "x@dup.com")
+    assert secret == "kept-secret"
+
+
+async def test_resolve_secret_falls_back_when_all_null(
+    db_session: AsyncSession,
+) -> None:
+    """同名域名全部 secret=null 时，_resolve_secret fallback 到全局密钥。"""
+    from app.services import inbound_service
+    from app.services.crypto import encrypt_token
+
+    user = User(
+        username="resuser2",
+        email="r2@test.local",
+        hashed_password="x",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    cf_account = CFAccount(
+        user_id=user.id,
+        name="t",
+        encrypted_api_token=encrypt_token("tok"),
+        account_id="acc-1",
+    )
+    db_session.add(cf_account)
+    await db_session.flush()
+    for i, zid in enumerate(["z1", "z2"], 1):
+        d = Domain(
+            cf_account_id=cf_account.id,
+            zone_id=zid,
+            domain_name="all-null.com",
+            status="active",
+            webhook_secret=None,
+        )
+        db_session.add(d)
+    await db_session.commit()
+
+    secret = await inbound_service._resolve_secret(db_session, "x@all-null.com")
+    assert secret == settings.CF_WEBHOOK_SECRET
+
+
+async def test_resolve_secret_deterministic_ordering(
+    db_session: AsyncSession,
+) -> None:
+    """同名域名多 secret 时，按 id 升序选最早创建的行（确定性）。"""
+    from app.services import inbound_service
+    from app.services.crypto import encrypt_token
+
+    user = User(
+        username="resuser3",
+        email="r3@test.local",
+        hashed_password="x",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    cf_account = CFAccount(
+        user_id=user.id,
+        name="t",
+        encrypted_api_token=encrypt_token("tok"),
+        account_id="acc-1",
+    )
+    db_session.add(cf_account)
+    await db_session.flush()
+    # 第一个 flush 拿到最小 id，第二个 flush 拿到更大 id
+    d_first = Domain(
+        cf_account_id=cf_account.id,
+        zone_id="z-first",
+        domain_name="order.com",
+        status="active",
+        webhook_secret="first-secret",
+    )
+    db_session.add(d_first)
+    await db_session.flush()
+    d_second = Domain(
+        cf_account_id=cf_account.id,
+        zone_id="z-second",
+        domain_name="order.com",
+        status="active",
+        webhook_secret="second-secret",
+    )
+    db_session.add(d_second)
+    await db_session.commit()
+
+    secret = await inbound_service._resolve_secret(db_session, "x@order.com")
+    # 按 id 升序，选最小 id 的行
+    assert secret == "first-secret"
