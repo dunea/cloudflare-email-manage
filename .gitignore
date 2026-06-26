@@ -29,3 +29,6 @@ htmlcov/
 # IDE
 .idea/
 .vscode/
+
+# Worker 示例依赖（保留 package-lock.json 以保证 bundle 可复现构建）
+examples/worker/node_modules/

@@ -73,8 +73,23 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(CloudflareClient, "list_zones", _fake_list_zones)
 
 
-async def _setup(client: AsyncClient, token: str) -> str:
-    """绑定并同步域名、创建邮箱地址，返回 public_token。"""
+async def _setup(
+    client: AsyncClient,
+    token: str,
+    db_session: AsyncSession | None = None,
+) -> str:
+    """绑定并同步域名、创建邮箱地址，返回 public_token。
+
+    同步阶段不再生成 per-domain webhook_secret（由 worker_deploy_service
+    统一管理），新建 Domain.webhook_secret 默认 NULL。
+
+    若传入 ``db_session``，会先显式 seed 一个非空 secret 再清空，
+    以覆盖 legacy Worker 依赖全局密钥 fallback 的兼容路径。
+    """
+    from sqlalchemy import select
+
+    from app.models import CFAccount, Domain
+
     bind = await client.post(
         "/api/v1/cf-accounts",
         headers=_auth(token),
@@ -90,6 +105,19 @@ async def _setup(client: AsyncClient, token: str) -> str:
         headers=_auth(token),
         json={"domain_id": domain_id, "local_part": "hello"},
     )
+    if db_session is not None:
+        rows = (
+            await db_session.execute(
+                select(Domain).join(CFAccount).where(CFAccount.id == account_id)
+            )
+        ).scalars().all()
+        assert rows, "test 期望同步至少产生一个域名"
+        for d in rows:
+            d.webhook_secret = "seeded-secret"
+        await db_session.flush()
+        for d in rows:
+            d.webhook_secret = None
+        await db_session.commit()
     return created.json()["data"]["public_token"]
 
 
@@ -97,12 +125,14 @@ async def _setup(client: AsyncClient, token: str) -> str:
 
 
 async def test_text_endpoint_returns_latest_mail(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """纯文本端点返回最新邮件的中文标签字段与正文。"""
     _patch_cf(monkeypatch)
     token = await _register_and_login(client)
-    public_token = await _setup(client, token)
+    public_token = await _setup(client, token, db_session)
     await _post_webhook(
         client,
         {
@@ -124,12 +154,14 @@ async def test_text_endpoint_returns_latest_mail(
 
 
 async def test_html_endpoint_returns_page(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """HTML 端点返回包含邮件信息的 HTML 页面。"""
     _patch_cf(monkeypatch)
     token = await _register_and_login(client)
-    public_token = await _setup(client, token)
+    public_token = await _setup(client, token, db_session)
     await _post_webhook(
         client,
         {
@@ -228,12 +260,14 @@ async def test_reset_token_invalidates_old(
 
 
 async def test_public_mail_matches_case_insensitive(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Webhook 传入大写 to 地址，公开查询仍能匹配到邮件。"""
     _patch_cf(monkeypatch)
     token = await _register_and_login(client)
-    public_token = await _setup(client, token)
+    public_token = await _setup(client, token, db_session)
     # 创建的邮箱为 hello@example.com，Webhook 传入 HELLO@example.com
     await _post_webhook(
         client,

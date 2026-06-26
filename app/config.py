@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
+    # 平台自身对外可访问的基础 URL（用于 Worker 回传 webhook）
+    # 本地开发：http://localhost:8000
+    # 生产：https://your-domain.com
+    APP_BASE_URL: str = "http://localhost:8000"
+
     # 数据库
     DATABASE_URL: str = "sqlite+aiosqlite:///./cf_email.db"
 

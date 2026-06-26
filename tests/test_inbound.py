@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import InboundEmail
+from app.models import CFAccount, Domain, InboundEmail, User
 from app.services.cloudflare import CloudflareClient
 
 # 模拟 CF 返回的 Zone 列表
@@ -90,8 +90,19 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(CloudflareClient, "list_zones", _fake_list_zones)
 
 
-async def _setup_email_address(client: AsyncClient, token: str) -> str:
-    """绑定并同步域名、创建邮箱地址，返回 full_address。"""
+async def _setup_email_address(
+    client: AsyncClient,
+    token: str,
+    db_session: AsyncSession | None = None,
+) -> str:
+    """绑定并同步域名、创建邮箱地址，返回 full_address。
+
+    同步阶段不再自动生成 webhook_secret（由 worker_deploy_service 统一管理），
+    新建的 Domain.webhook_secret 默认 NULL，使本 helper 默认走全局签名校验。
+    """
+    from app.models import CFAccount, Domain
+    from sqlalchemy import select
+
     bind = await client.post(
         "/api/v1/cf-accounts",
         headers=_auth(token),
@@ -111,6 +122,15 @@ async def _setup_email_address(client: AsyncClient, token: str) -> str:
         headers=_auth(token),
         json={"domain_id": domain_id, "local_part": "hello"},
     )
+    if db_session is not None:
+        rows = (
+            await db_session.execute(
+                select(Domain).join(CFAccount).where(CFAccount.id == account_id)
+            )
+        ).scalars().all()
+        for d in rows:
+            d.webhook_secret = None
+        await db_session.commit()
     return created.json()["data"]["full_address"]
 
 
@@ -176,12 +196,14 @@ async def test_webhook_invalid_payload(client: AsyncClient) -> None:
 
 
 async def test_list_inbound_isolation(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """用户仅能看到发往自己邮箱地址的邮件。"""
     _patch_cf(monkeypatch)
     token_a = await _register_and_login(client)
-    await _setup_email_address(client, token_a)
+    await _setup_email_address(client, token_a, db_session)
     await _post_webhook(
         client,
         {"to": "hello@example.com", "from": "x@y.com", "subject": "s", "text": "t"},
@@ -199,12 +221,14 @@ async def test_list_inbound_isolation(
 
 
 async def test_get_inbound_email(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """按 id 获取归属于本人的收件邮件。"""
     _patch_cf(monkeypatch)
     token = await _register_and_login(client)
-    await _setup_email_address(client, token)
+    await _setup_email_address(client, token, db_session)
     webhook = await _post_webhook(
         client,
         {"to": "hello@example.com", "from": "x@y.com", "subject": "s", "text": "t"},
@@ -217,12 +241,14 @@ async def test_get_inbound_email(
 
 
 async def test_get_inbound_isolation(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """他人无法按 id 获取不属于自己的邮件。"""
     _patch_cf(monkeypatch)
     token_a = await _register_and_login(client)
-    await _setup_email_address(client, token_a)
+    await _setup_email_address(client, token_a, db_session)
     webhook = await _post_webhook(
         client,
         {"to": "hello@example.com", "from": "x@y.com", "subject": "s", "text": "t"},
@@ -246,12 +272,14 @@ async def test_list_requires_auth(client: AsyncClient) -> None:
 
 
 async def test_webhook_normalizes_to_address_case(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Webhook 传入混合大小写 to 地址，入库后统一为小写，归属匹配正常。"""
     _patch_cf(monkeypatch)
     token = await _register_and_login(client)
-    await _setup_email_address(client, token)
+    await _setup_email_address(client, token, db_session)
 
     # 创建的邮箱为 hello@example.com，Webhook 传入 Hello@example.com
     resp = await _post_webhook(
@@ -282,3 +310,296 @@ async def test_webhook_normalizes_to_address_case(
     )
     assert filtered.status_code == 200
     assert filtered.json()["data"]["total"] == 1
+
+
+# ---- per-domain webhook_secret 签名校验 ----
+
+
+async def _make_domain(
+    db_session: AsyncSession,
+    *,
+    domain_name: str = "example.com",
+    webhook_secret: str | None = "domain-secret-xyz",
+) -> Domain:
+    """直接构造 CFAccount + Domain（绕过 CF API），用于 webhook_secret 测试。"""
+    from app.services.crypto import encrypt_token
+
+    user = User(
+        username=f"u_{domain_name.replace('.', '_')}",
+        email=f"{domain_name}@test.local",
+        hashed_password="x",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    cf_account = CFAccount(
+        user_id=user.id,
+        name="t",
+        encrypted_api_token=encrypt_token("tok"),
+        account_id="acc-test",
+    )
+    db_session.add(cf_account)
+    await db_session.flush()
+    domain = Domain(
+        cf_account_id=cf_account.id,
+        zone_id=f"zone-{domain_name}",
+        domain_name=domain_name,
+        status="active",
+        webhook_secret=webhook_secret,
+    )
+    db_session.add(domain)
+    await db_session.commit()
+    await db_session.refresh(domain)
+    return domain
+
+
+async def test_webhook_per_domain_secret_valid(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """域名有 webhook_secret 且 payload 含 zone_id 时，用该密钥签名通过。"""
+    domain = await _make_domain(db_session, webhook_secret="per-domain-key-001")
+
+    body = json.dumps(
+        {
+            "to": "anyone@example.com",
+            "from": "s@x.com",
+            "zone_id": domain.zone_id,
+            "subject": "t",
+            "text": "x",
+        }
+    ).encode("utf-8")
+    sig = hmac.new(b"per-domain-key-001", body, hashlib.sha256).hexdigest()
+    resp = await client.post(
+        "/api/v1/inbound/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Webhook-Signature": sig,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["code"] == 0
+
+
+async def test_webhook_per_domain_secret_wrong_global_rejected(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """域名有 webhook_secret 时，用全局密钥签名应被拒绝。"""
+    domain = await _make_domain(db_session, webhook_secret="per-domain-key-002")
+
+    body = json.dumps(
+        {
+            "to": "a@example.com",
+            "from": "s@x.com",
+            "zone_id": domain.zone_id,
+            "subject": "t",
+            "text": "x",
+        }
+    ).encode("utf-8")
+    # 用全局 CF_WEBHOOK_SECRET 签名（与域名密钥不一致）
+    sig = _sign(body)
+    resp = await client.post(
+        "/api/v1/inbound/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Webhook-Signature": sig,
+        },
+    )
+    assert resp.status_code == 401
+
+
+async def test_webhook_fallback_global_when_domain_has_no_secret(
+    client: AsyncClient,
+) -> None:
+    """域名 webhook_secret 为空（或域名不在 DB）时回退到全局密钥校验。"""
+    body = json.dumps(
+        {"to": "ghost@unknown.com", "from": "s@x.com", "subject": "t", "text": "x"}
+    ).encode("utf-8")
+    resp = await client.post(
+        "/api/v1/inbound/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Webhook-Signature": _sign(body),
+        },
+    )
+    assert resp.status_code == 200
+
+
+async def test_webhook_domain_secret_case_insensitive(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """域名匹配大小写不敏感：to 用大写域名也能命中 DB 中的小写域名 secret。"""
+    domain = await _make_domain(
+        db_session, webhook_secret="case-key", domain_name="Mixed.COM"
+    )
+
+    body = json.dumps(
+        {
+            "to": "x@MIXED.com",
+            "from": "s@x.com",
+            "zone_id": domain.zone_id,
+            "subject": "t",
+            "text": "x",
+        }
+    ).encode("utf-8")
+    sig = hmac.new(b"case-key", body, hashlib.sha256).hexdigest()
+    resp = await client.post(
+        "/api/v1/inbound/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Webhook-Signature": sig,
+        },
+    )
+    assert resp.status_code == 200
+
+
+# ---- _resolve_secret 针对性测试 ----
+
+
+async def _make_resolve_account(
+    db_session: AsyncSession,
+    *,
+    username: str = "resuser",
+) -> tuple[User, CFAccount]:
+    """为 _resolve_secret 测试快速构造 User + CFAccount 并 flush。"""
+    from app.services.crypto import encrypt_token
+
+    user = User(
+        username=username,
+        email=f"{username}@test.local",
+        hashed_password="x",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    cf_account = CFAccount(
+        user_id=user.id,
+        name="t",
+        encrypted_api_token=encrypt_token("tok"),
+        account_id="acc-1",
+    )
+    db_session.add(cf_account)
+    await db_session.flush()
+    return user, cf_account
+
+
+async def test_resolve_secret_uses_zone_id(
+    db_session: AsyncSession,
+) -> None:
+    """_resolve_secret 按 (zone_id, domain_name) 唯一定位，避免跨账号同名域名歧义。"""
+    from app.services import inbound_service
+
+    _user, cf_account = await _make_resolve_account(
+        db_session, username="resuser1"
+    )
+    d_first = Domain(
+        cf_account_id=cf_account.id,
+        zone_id="z1",
+        domain_name="dup.com",
+        status="active",
+        webhook_secret="first-secret",
+    )
+    db_session.add(d_first)
+    await db_session.flush()
+    d_second = Domain(
+        cf_account_id=cf_account.id,
+        zone_id="z2",
+        domain_name="dup.com",
+        status="active",
+        webhook_secret="second-secret",
+    )
+    db_session.add(d_second)
+    await db_session.commit()
+
+    # 不同 zone_id 拿到不同 secret，不再歧义
+    assert (
+        await inbound_service._resolve_secret(db_session, "x@dup.com", "z1")
+        == "first-secret"
+    )
+    assert (
+        await inbound_service._resolve_secret(db_session, "x@dup.com", "z2")
+        == "second-secret"
+    )
+
+
+async def test_resolve_secret_falls_back_when_null(
+    db_session: AsyncSession,
+) -> None:
+    """zone_id 命中域名但 webhook_secret=null 时 fallback 全局密钥。"""
+    from app.services import inbound_service
+
+    _user, cf_account = await _make_resolve_account(
+        db_session, username="resuser2"
+    )
+    d = Domain(
+        cf_account_id=cf_account.id,
+        zone_id="z1",
+        domain_name="null.com",
+        status="active",
+        webhook_secret=None,
+    )
+    db_session.add(d)
+    await db_session.commit()
+
+    secret = await inbound_service._resolve_secret(db_session, "x@null.com", "z1")
+    assert secret == settings.CF_WEBHOOK_SECRET
+
+
+async def test_resolve_secret_fails_close_on_zone_mismatch(
+    db_session: AsyncSession,
+) -> None:
+    """域名在 DB 中存在但 zone_id 不匹配 → fail-close（返回空串），不 fallback 全局密钥。"""
+    from app.services import inbound_service
+
+    _user, cf_account = await _make_resolve_account(
+        db_session, username="resuser3"
+    )
+    d = Domain(
+        cf_account_id=cf_account.id,
+        zone_id="z-real",
+        domain_name="real.com",
+        status="active",
+        webhook_secret="real-secret",
+    )
+    db_session.add(d)
+    await db_session.commit()
+
+    # zone_id 不匹配且域名已在 DB → fail-close，避免拿错/默认 secret
+    secret = await inbound_service._resolve_secret(
+        db_session, "x@real.com", "z-ghost"
+    )
+    assert secret == ""
+
+
+async def test_resolve_secret_legacy_no_zone_id(
+    db_session: AsyncSession,
+) -> None:
+    """旧 Worker 不传 zone_id 时，按域名降级匹配首条非空 secret（向后兼容）。"""
+    from app.services import inbound_service
+
+    _user, cf_account = await _make_resolve_account(
+        db_session, username="resuser4"
+    )
+    d_null = Domain(
+        cf_account_id=cf_account.id,
+        zone_id="z1",
+        domain_name="legacy.com",
+        status="active",
+        webhook_secret=None,
+    )
+    db_session.add(d_null)
+    await db_session.flush()
+    d_kept = Domain(
+        cf_account_id=cf_account.id,
+        zone_id="z2",
+        domain_name="legacy.com",
+        status="active",
+        webhook_secret="legacy-secret",
+    )
+    db_session.add(d_kept)
+    await db_session.commit()
+
+    # 旧路径：zone_id=None → 按域名升序匹配，跳过 null
+    secret = await inbound_service._resolve_secret(db_session, "x@legacy.com")
+    assert secret == "legacy-secret"
