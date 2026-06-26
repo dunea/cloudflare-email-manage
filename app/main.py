@@ -1,5 +1,6 @@
 """FastAPI 应用入口：创建 app、注册路由与异常处理器。"""
 
+import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,6 +17,7 @@ from app.database import async_session_maker
 from app.exceptions import register_exception_handlers
 from app.routers import api_router
 from app.services.auth_service import ensure_admin_user
+from app.services.migration_service import auto_migrate_sqlite
 from app.web import web_router
 from app.web.deps import WebRedirect, set_auth_cookies
 
@@ -30,10 +32,12 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     """应用生命周期：确保管理员账号存在。
 
-    建表由 Alembic 迁移负责（启动前先执行 ``alembic upgrade head``）。
-    此处不再调用 ``create_all``，避免与迁移产生“表已存在”冲突。
+    默认建表由 Alembic 迁移负责（启动前先执行 ``alembic upgrade head``）。
+    当 ``AUTO_MIGRATE_SQLITE=true`` 时，会先在线程中自动执行 SQLite 迁移，
+    避免与 Alembic 异步迁移环境中的 ``asyncio.run`` 冲突。
     """
     settings.validate_for_startup()
+    await asyncio.to_thread(auto_migrate_sqlite)
     async with async_session_maker() as session:
         await ensure_admin_user(session)
     yield

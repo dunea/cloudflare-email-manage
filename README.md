@@ -120,6 +120,14 @@ docker run --rm -p 8000:8000 --env-file .env cf-email-manager
 ```
 
 如果使用 SQLite 并希望数据持久化，请在部署时为数据库文件所在目录配置 volume，并同步调整 `DATABASE_URL`。
+例如 Docker/Portainer 中可将 volume 挂载到 `/app/data`，并设置：
+
+```env
+DATABASE_URL=sqlite+aiosqlite:////app/data/cf_email.db
+AUTO_MIGRATE_SQLITE=true
+```
+
+`AUTO_MIGRATE_SQLITE=true` 仅对 SQLite 生效；启动时会自动创建 SQLite 文件父目录并执行 `alembic upgrade head`。如果不启用该开关，仍需按上面的命令手动执行迁移。
 
 ## 环境变量
 
@@ -132,6 +140,7 @@ COOKIE_SECURE=true
 CSRF_PROTECTION=true
 DEBUG=false
 CF_FAKE_MODE=false
+AUTO_MIGRATE_SQLITE=false
 ```
 
 生产环境启动时会拒绝默认密钥、默认管理员密码、非 HTTPS 回调地址、不安全 Cookie 配置和测试模式。
@@ -142,6 +151,7 @@ CF_FAKE_MODE=false
 |------|------|
 | `SECRET_KEY` | JWT、会话签名和 Fernet 加密密钥，生产环境必须替换 |
 | `DATABASE_URL` | SQLAlchemy 异步数据库连接，默认 `sqlite+aiosqlite:///./cf_email.db` |
+| `AUTO_MIGRATE_SQLITE` | 是否在启动时自动迁移 SQLite 数据库，默认 `false` |
 | `CF_API_BASE_URL` | Cloudflare API 基础地址 |
 | `CF_WEBHOOK_SECRET` | Worker Webhook 签名密钥，旧部署回退使用 |
 | `APP_BASE_URL` | 平台公网地址，Worker 回调和生产校验会使用 |

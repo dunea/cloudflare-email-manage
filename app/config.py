@@ -30,6 +30,8 @@ class Settings(BaseSettings):
 
     # 数据库
     DATABASE_URL: str = "sqlite+aiosqlite:///./cf_email.db"
+    # 启动时是否自动执行 SQLite Alembic 迁移
+    AUTO_MIGRATE_SQLITE: bool = False
 
     # Cloudflare
     CF_API_BASE_URL: str = "https://api.cloudflare.com/client/v4"
