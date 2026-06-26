@@ -6,6 +6,7 @@
   <p class="mb-6 text-sm text-slate-500">创建账号以使用 {{ app_name }}</p>
 
   <form method="post" action="/register" class="space-y-4" x-data="{ show: false }">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
     <div>
       <label class="mb-1 block text-sm font-medium text-slate-700">用户名</label>
       <input name="username" value="{{ form.username | default('') }}" required autofocus

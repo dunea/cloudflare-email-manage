@@ -4,7 +4,7 @@
 通过服务端渲染（Jinja2）+ 表单 POST + Cookie 会话向浏览器用户提供界面。
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.web import (
     admin,
@@ -22,9 +22,13 @@ from app.web import (
     public_mail,
     seo,
 )
+from app.web.csrf import validate_csrf_token
 
 # 聚合路由，由 main.py 挂载到根路径 "/"
-web_router = APIRouter(include_in_schema=False)
+web_router = APIRouter(
+    include_in_schema=False,
+    dependencies=[Depends(validate_csrf_token)],
+)
 web_router.include_router(dashboard.router)
 web_router.include_router(auth.router)
 web_router.include_router(cf_accounts.router)

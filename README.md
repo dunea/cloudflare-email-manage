@@ -29,8 +29,19 @@ pip install -r requirements.txt
 
 # 3. 准备环境变量
 cp .env.example .env
-# 编辑 .env，至少修改 SECRET_KEY、ADMIN_EMAIL、ADMIN_PASSWORD
+# 编辑 .env，至少修改 SECRET_KEY、CF_WEBHOOK_SECRET、ADMIN_EMAIL、ADMIN_PASSWORD
 ```
+
+生产部署时还必须设置：
+
+- `ENVIRONMENT=production`
+- `APP_BASE_URL=https://your-domain.com`
+- `COOKIE_SECURE=true`
+- `CSRF_PROTECTION=true`
+- `DEBUG=false`
+- `CF_FAKE_MODE=false`（如未配置可省略，默认 false）
+
+生产环境启动会拒绝默认密钥、默认管理员密码、非 HTTPS 回调地址和不安全 Cookie 配置。
 
 ## 数据库迁移
 
@@ -176,12 +187,14 @@ const sig = await crypto.subtle.sign("HMAC", key, body);
 - 错误响应：`{"code": 非0, "data": null, "message": "错误描述"}`
 - 用户认证：`Authorization: Bearer {jwt_token}`
 - 程序化调用：`X-API-Key: {api_key}`
+- Web 表单：生产环境启用 CSRF token 校验
 
 ## 安全说明
 
 - CF API Token 入库前使用 `SECRET_KEY` 经 Fernet 对称加密存储
 - 用户密码使用 bcrypt 哈希
 - API Key 仅存储哈希值，原始值只在创建时返回一次
+- 生产环境会强校验关键安全配置，未通过则拒绝启动
 
 ## 许可证
 

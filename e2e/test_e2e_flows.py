@@ -70,10 +70,18 @@ def test_full_cf_flow(page: Page, live_server: str) -> None:
     page.get_by_role("button", name="创建", exact=True).click()
     expect(page.locator("body")).to_contain_text("hello@e2e.example.com")
 
+    # 添加已验证目标地址（假 CF 下立即返回 verified）
+    page.goto(f"{live_server}/destination-addresses")
+    page.select_option('select[name="cf_account_id"]', index=0)
+    page.fill('input[name="email"]', "dest@example.com")
+    page.get_by_role("button", name="添加").click()
+    expect(page.locator("body")).to_contain_text("dest@example.com")
+    expect(page.locator("body")).to_contain_text("已验证")
+
     # 创建转发规则
     page.goto(f"{live_server}/forwarding-rules")
-    page.select_option('select[name="email_address_id"]', index=0)
-    page.fill('input[name="destination_email"]', "dest@example.com")
+    page.select_option('select[name="email_address_id"]', index=1)
+    page.select_option('select[name="destination_email"]', "dest@example.com")
     page.get_by_role("button", name="创建", exact=True).click()
     expect(page.locator("body")).to_contain_text("dest@example.com")
 

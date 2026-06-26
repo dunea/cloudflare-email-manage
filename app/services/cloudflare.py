@@ -18,7 +18,6 @@ import httpx
 from app.config import settings
 from app.exceptions import CloudflareError
 
-
 # ---- Worker 部署相关响应 TypedDict ----
 
 
@@ -343,7 +342,13 @@ class CloudflareClient:
         返回项含 ``id`` / ``email`` / ``verified``（verified 为 ISO 时间字符串或 None）。
         """
         if settings.CF_FAKE_MODE:
-            return []
+            return [
+                {
+                    "id": "dest-e2e",
+                    "email": "dest@example.com",
+                    "verified": "2026-06-26T08:00:00Z",
+                }
+            ]
         result = await self._request(
             "GET", f"/accounts/{account_id}/email/routing/addresses"
         )
@@ -368,7 +373,11 @@ class CloudflareClient:
         （verified 创建时为 None，表示待验证）。
         """
         if settings.CF_FAKE_MODE:
-            return {"id": "dest-e2e", "email": email, "verified": None}
+            return {
+                "id": "dest-e2e",
+                "email": email,
+                "verified": "2026-06-26T08:00:00Z",
+            }
         result = await self._request(
             "POST",
             f"/accounts/{account_id}/email/routing/addresses",
@@ -403,7 +412,7 @@ class CloudflareClient:
         if settings.CF_FAKE_MODE:
             return {"id": "msg-e2e"}
         resp = await self._raw_request(
-            "POST", f"/accounts/{account_id}/email/send", json=payload
+            "POST", f"/accounts/{account_id}/email/sending/send", json=payload
         )
         if resp.status_code >= 400:
             raise CloudflareError(

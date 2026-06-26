@@ -33,6 +33,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     建表由 Alembic 迁移负责（启动前先执行 ``alembic upgrade head``）。
     此处不再调用 ``create_all``，避免与迁移产生“表已存在”冲突。
     """
+    settings.validate_for_startup()
     async with async_session_maker() as session:
         await ensure_admin_user(session)
     yield

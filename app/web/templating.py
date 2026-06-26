@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from app.config import settings
 from app.exceptions import AppException
 from app.models import User
+from app.web.csrf import get_csrf_token
 
 # 模板目录：app/templates
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
@@ -81,6 +82,7 @@ def render(
         "app_name": settings.APP_NAME,
         "app_version": settings.APP_VERSION,
         "app_description": APP_DESCRIPTION,
+        "csrf_token": get_csrf_token(request),
         "active": active,
         "layout": None,
         "flashes": pop_flashes(request),
