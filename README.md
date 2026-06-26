@@ -6,7 +6,7 @@
 
 **Keywords:** Cloudflare Email Manager, Cloudflare Email Routing, Cloudflare Email Sending, FastAPI email platform, self-hosted email platform, email forwarding, inbound email webhook, API keys, SQLite, SQLAlchemy, Alembic.
 
-> Cloudflare Email Sending 当前在项目中按 Beta 能力接入，README 中的部署说明默认你已经具备对应账号权限。
+> Cloudflare Email Sending 当前在项目中按 Beta 能力接入，默认每日限额为 **1000 封/天**；README 中的部署说明默认你已经具备对应账号权限。
 
 ## 项目亮点
 

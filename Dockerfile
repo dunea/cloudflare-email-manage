@@ -10,7 +10,12 @@ COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt
 
-COPY . .
+RUN groupadd --system appuser \
+    && useradd --system --gid appuser --create-home appuser
+
+COPY --chown=appuser:appuser . .
+
+USER appuser
 
 EXPOSE 8000
 
