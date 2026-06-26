@@ -6,10 +6,15 @@
 from fastapi import APIRouter, Query, status
 
 from app.dependencies import CurrentUser, SessionDep
-from app.schemas.cf_account import CFAccountCreate, CFAccountRead, CFAccountUpdate
+from app.schemas.cf_account import (
+    CFAccountCreate,
+    CFAccountRead,
+    CFAccountUpdate,
+    WorkerDeployResult,
+)
 from app.schemas.common import ApiResponse, PageData
 from app.schemas.domain import DomainRead, DomainSyncResult
-from app.services import cf_account_service, domain_service
+from app.services import cf_account_service, domain_service, worker_deploy_service
 
 router = APIRouter(prefix="/cf-accounts", tags=["CF账号"])
 
@@ -119,4 +124,26 @@ async def sync_domains(
         synced=len(domains),
         domains=[DomainRead.model_validate(d) for d in domains],
     )
+    return ApiResponse(data=result)
+
+
+@router.post(
+    "/{account_id}/deploy-worker",
+    response_model=ApiResponse[WorkerDeployResult],
+    summary="一键部署收件 Worker",
+)
+async def deploy_worker(
+    account_id: int, current_user: CurrentUser, session: SessionDep
+) -> ApiResponse[WorkerDeployResult]:
+    """为该 CF 账号部署/更新账号级收件 Worker，并配置所有域名的 catch-all。
+
+    流程：启用 Email Routing → 上传 Worker 脚本 → 设置域名→密钥 secret →
+    为每个域名配置 catch-all → Worker。CF API Token 需具备
+    Account:Workers Scripts:Edit 权限。
+    """
+    cf_account = await cf_account_service.get_cf_account_or_404(
+        session, account_id, current_user
+    )
+    raw = await worker_deploy_service.deploy_worker_for_account(session, cf_account)
+    result = WorkerDeployResult.model_validate(raw)
     return ApiResponse(data=result)

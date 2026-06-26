@@ -29,3 +29,7 @@ htmlcov/
 # IDE
 .idea/
 .vscode/
+
+# Worker 示例依赖与锁文件（源码 src/ 与 bundle 产物 app/assets/ 需提交）
+examples/worker/node_modules/
+examples/worker/package-lock.json

@@ -12,6 +12,12 @@
       <button type="submit"
               class="rounded-lg border border-brand px-4 py-2 text-sm font-semibold text-brand hover:bg-brand/5">同步域名</button>
     </form>
+    <form method="post" action="/cf-accounts/{{ account.id }}/deploy-worker">
+      <button type="submit"
+              x-data
+              @click.prevent="$store.confirm.ask($el, '将自动部署收件 Worker 到你的 CF 账号，并配置所有域名的 catch-all。需 Token 具备 Account:Workers Scripts:Edit 权限。是否继续？')"
+              class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">一键部署 Worker</button>
+    </form>
     <form method="post" action="/cf-accounts/{{ account.id }}/delete"
           x-data @submit.prevent="$store.confirm.ask($el, '确定解绑该 CF 账号？此操作不可撤销。')">
       <button type="submit"
@@ -60,5 +66,21 @@
               class="rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark">保存修改</button>
     </form>
   </div>
+</div>
+
+<div class="mt-6 rounded-xl border border-brand/30 bg-brand/5 p-6">
+  <h3 class="mb-3 font-semibold text-slate-800">一键部署收件 Worker</h3>
+  <p class="mb-3 text-sm text-slate-600">
+    点击上方「一键部署 Worker」按钮，将自动在你的 CF 账号下部署账号级收件 Worker，
+    并为该账号下<strong>所有域名</strong>配置 Email Routing catch-all → Worker，
+    域名下任意地址的邮件都会自动入库。
+  </p>
+  <ul class="mb-4 list-disc pl-5 text-xs text-slate-600">
+    <li>Worker 名称：<code class="font-mono">cf-email-manager-webhook</code>（账号内唯一）</li>
+    <li>每次部署会刷新所有域名签名密钥与 catch-all 路由</li>
+    <li>新增域名后需重新部署一次以更新密钥映射</li>
+    <li>CF API Token 需具备 <code class="font-mono">Account:Workers Scripts:Edit</code> 权限</li>
+    <li>每个域名独立签名密钥，验证 webhook 时按收件域名自动定位</li>
+  </ul>
 </div>
 {% endblock %}

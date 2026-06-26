@@ -4,6 +4,8 @@
 共享：域名所有者可将域名共享给其他用户使用。
 """
 
+import secrets
+
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,6 +46,7 @@ async def sync_domains(
                 zone_id=zone_id,
                 domain_name=domain_name,
                 status=status,
+                webhook_secret=secrets.token_urlsafe(32),
             )
             session.add(domain)
             synced.append(domain)

@@ -35,3 +35,19 @@ class CFAccountRead(BaseModel):
     account_id: str
     is_active: bool
     created_at: datetime
+
+
+class DeployedDomain(BaseModel):
+    """一键部署返回：已部署的域名信息。"""
+
+    domain_id: int
+    domain_name: str
+    zone_id: str
+
+
+class WorkerDeployResult(BaseModel):
+    """一键部署 Worker 结果。"""
+
+    worker_name: str
+    webhook_url: str
+    domains: list[DeployedDomain] = Field(default_factory=list)

@@ -1,33 +1,28 @@
-# CF Email Manager — Email Worker 示例
+# CF Email Manager — Email Worker 源码
 
-本目录包含一个可直接部署的 Cloudflare Email Worker，用于将 CF Email Routing
-收到的邮件转发到 CF Email Manager 平台的 Webhook 端点。
+本目录是 CF Email Manager 平台收件 Worker 的**源码参考**与 bundle 构建源。
 
-## 架构
+- **源码**：`src/index.js`（账号级 Worker，根据收件地址域名在
+  `WEBHOOK_SECRETS` JSON 映射中查找对应的签名密钥）
+- **bundle 产物**：`app/assets/email_worker.bundle.js`（后端一键部署时上传到 CF）
 
-```
-外部发件人
-  → Cloudflare Email Routing（收到邮件）
-  → 触发本 Worker 的 email() handler
-  → postal-mime 解析 MIME（提取 subject / text / html）
-  → 构造 JSON {to, from, subject, text, html}
-  → HMAC-SHA256 签名
-  → POST 平台 /api/v1/inbound/webhook
-  → 平台校验签名后入库
-  → 用户通过公开链接 /mail/{token} 查看邮件
-```
+## 推荐：在平台前端一键部署
 
-## 前提条件
+平台已支持一键部署 Worker。直接登录平台 → CF 账号详情 → 点击「一键部署 Worker」
+即可，平台会用你已绑定的 CF API Token 自动：
 
-- 已安装 Node.js 18+
-- 已安装 wrangler（`npm install -g wrangler` 或用 npx）
-- 已 `wrangler login` 登录 Cloudflare 账号
-- 域名已接入 Cloudflare 且已启用 Email Routing
-- CF Email Manager 平台已部署并可访问
+1. 启用各域名 Email Routing
+2. 上传 Worker 脚本（含 `WEBHOOK_URL` binding）
+3. 注入 `WEBHOOK_SECRETS`（域名→签名密钥 JSON）
+4. 为每个域名配置 catch-all → Worker
 
-## 部署步骤
+无需本机 Node 环境，无需 wrangler，无需手动配路由。
 
-### 1. 安装依赖
+## 手动部署（降级方案）
+
+仅在 Token 权限不足或 API 部署失败时使用。
+
+### 1. 安装依赖并打包
 
 ```bash
 cd examples/worker
@@ -43,19 +38,15 @@ npm install
 WEBHOOK_URL = "https://your-platform-domain.com/api/v1/inbound/webhook"
 ```
 
-> 本地开发可用 `http://localhost:8000/api/v1/inbound/webhook`
+### 3. 设置密钥
 
-### 3. 设置 Webhook 密钥
+Worker 需要两个环境变量/secret：
+- `WEBHOOK_URL`（plain_text，平台收件地址）— 在 `wrangler.toml` 的 `[vars]` 中配置
+- `WEBHOOK_SECRETS`（secret，JSON 映射 `{"example.com":"<密钥1>","foo.com":"<密钥2>"}`）
+  — 通过 `npx wrangler secret put WEBHOOK_SECRETS` 设置
 
-将平台 `.env` 中的 `CF_WEBHOOK_SECRET` 值设为 Worker 的 secret：
-
-```bash
-npx wrangler secret put CF_WEBHOOK_SECRET
-# 粘贴平台 .env 中 CF_WEBHOOK_SECRET 的值（如 29135d04-7cf8-4427-9788-630732ac4ef8）
-```
-
-> ⚠️ Worker 端的 `CF_WEBHOOK_SECRET` 必须与平台 `.env` 中的**完全一致**，
-> 否则签名校验失败（401），邮件不入库。
+> ⚠️ `WEBHOOK_SECRETS` JSON 中的每个域名密钥必须与平台 `Domain.webhook_secret`
+> **完全一致**；缺失域名时该收件地址会被 Worker 拒绝投递。
 
 ### 4. 部署 Worker
 
@@ -63,32 +54,53 @@ npx wrangler secret put CF_WEBHOOK_SECRET
 npx wrangler deploy
 ```
 
-部署完成后会输出 Worker URL，如：
-`https://cf-email-manager-webhook.<your-subdomain>.workers.dev`
-
 ### 5. 配置 Email Routing 路由规则
 
-进入 Cloudflare Dashboard：
+进入 Cloudflare Dashboard → 选择域名 → Email → Email Routing → Routing Rules：
+添加 catch-all 规则，操作选择「发送到 Worker」并指定刚部署的 Worker。
 
-1. 选择你的域名
-2. 左侧菜单 **Email** → **Email Routing**
-3. 确保已启用 Email Routing
-4. 进入 **Routing Rules** 标签页
-5. 添加规则：
-   - **匹配条件**：自定义地址（如 `hello@example.com`）或 Catch-all
-   - **操作**：发送到 Worker → 选择刚部署的 `cf-email-manager-webhook`
-6. 保存
+## 重建 bundle 产物
 
-> Catch-all 规则会将域名下所有未匹配的地址都投递给 Worker，
-> 适合平台用户创建任意邮箱地址的场景。
+后端一键部署读取的是 `app/assets/email_worker.bundle.js`（含 postal-mime）。
+修改源码后需重新打包：
 
-### 6. 验证
+```bash
+cd examples/worker
+npx esbuild src/index.js --bundle --format=esm --platform=browser \
+  --target=es2022 --outfile=../../app/assets/email_worker.bundle.js
+```
 
-1. 在 CF Email Manager 平台创建一个邮箱地址（如 `hello@example.com`）
-2. 用外部邮箱（如 Gmail）向该地址发一封测试邮件
-3. 等待几秒，访问公开查询链接 `/mail/{token}` 或登录平台查看收件箱
-4. 如果看到邮件 → 配置成功
-5. 如果看不到邮件 → 查看下面的排查指南
+> 需要 Node 18+；esbuild 通过 npx 临时下载，无需全局安装。
+
+## 架构
+
+```
+外部发件人
+  → Cloudflare Email Routing（catch-all → Worker）
+  → 触发本 Worker 的 email() handler
+  → 从 message.to 提取域名，查 WEBHOOK_SECRETS 找密钥
+  → postal-mime 解析 MIME（提取 subject / text / html）
+  → 构造 JSON {to, from, subject, text, html}
+  → HMAC-SHA256(域名密钥) 签名
+  → POST 平台 /api/v1/inbound/webhook
+  → 平台按收件域名查 Domain.webhook_secret 验签 → 入库
+  → 用户通过公开链接 /mail/{token} 查看邮件
+```
+
+## 排查
+
+如邮件未入库：
+
+| 现象 | 可能原因 | 排查 |
+|------|---------|------|
+| Worker 报错「未找到域名 X 对应的签名密钥」 | `WEBHOOK_SECRETS` 中缺少该域名 | 同步域名后在平台重新一键部署 |
+| 平台返回 401 | 签名不匹配 | 确认 Worker 的 `WEBHOOK_SECRETS` 中该域名密钥与平台 `Domain.webhook_secret` 一致 |
+| 平台返回 401 | `WEBHOOK_URL` 不可达 | 从 Worker 所在网络 curl 测试 |
+| 平台返回 422 | 载荷结构异常 | 用 `wrangler tail` 查看请求体 |
+
+```bash
+npx wrangler tail    # 实时日志
+```
 
 ## 排查指南
 

@@ -10,6 +10,7 @@ Email Routing（转发规则 / 目标地址）、Email Sending（Beta）。
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -173,6 +174,64 @@ class CloudflareClient:
         )
         return result if isinstance(result, dict) else {}
 
+    # ---- Email Routing：启用/状态 ----
+
+    async def get_email_routing_status(self, zone_id: str) -> dict[str, Any]:
+        """查询 Zone 的 Email Routing 状态（GET /zones/{zid}/email/routing）。"""
+        if settings.CF_FAKE_MODE:
+            return {"enabled": True, "status": "ready"}
+        result = await self._request("GET", f"/zones/{zone_id}/email/routing")
+        return result if isinstance(result, dict) else {}
+
+    async def enable_email_routing(self, zone_id: str) -> dict[str, Any]:
+        """启用 Zone 的 Email Routing（POST .../email/routing/enable）。"""
+        if settings.CF_FAKE_MODE:
+            return {"enabled": True, "status": "ready"}
+        result = await self._request(
+            "POST", f"/zones/{zone_id}/email/routing/enable"
+        )
+        return result if isinstance(result, dict) else {}
+
+    # ---- Email Routing：catch-all 规则 ----
+
+    async def get_catch_all_rule(self, zone_id: str) -> dict[str, Any]:
+        """获取 Zone 的 catch-all 规则（GET .../email/routing/rules/catch_all）。"""
+        if settings.CF_FAKE_MODE:
+            return {
+                "id": "catch-all-fake",
+                "enabled": False,
+                "actions": [],
+                "matchers": [{"type": "all"}],
+            }
+        result = await self._request(
+            "GET", f"/zones/{zone_id}/email/routing/rules/catch_all"
+        )
+        return result if isinstance(result, dict) else {}
+
+    async def update_catch_all_to_worker(
+        self, zone_id: str, worker_name: str
+    ) -> dict[str, Any]:
+        """将 Zone 的 catch-all 规则设为投递到指定 Worker（PUT .../rules/catch_all）。
+
+        action: ``{"type": "worker", "value": [worker_name], "enabled": True}``。
+        """
+        if settings.CF_FAKE_MODE:
+            return {
+                "id": "catch-all-fake",
+                "enabled": True,
+                "actions": [{"type": "worker", "value": [worker_name]}],
+                "matchers": [{"type": "all"}],
+            }
+        payload = {
+            "enabled": True,
+            "actions": [{"type": "worker", "value": [worker_name]}],
+            "matchers": [{"type": "all"}],
+        }
+        result = await self._request(
+            "PUT", f"/zones/{zone_id}/email/routing/rules/catch_all", json=payload
+        )
+        return result if isinstance(result, dict) else {}
+
     # ---- Email Routing：目标地址 ----
 
     async def list_destination_addresses(
@@ -254,3 +313,105 @@ class CloudflareClient:
         except ValueError:
             body = {}
         return body if isinstance(body, dict) else {}
+
+    # ---- Workers Scripts：部署与 Secret ----
+
+    async def upload_worker_script(
+        self,
+        account_id: str,
+        script_name: str,
+        main_module_name: str,
+        script_content: bytes,
+        *,
+        compatibility_date: str = "2025-01-01",
+        compatibility_flags: list[str] | None = None,
+        bindings: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """上传并部署 Worker 脚本（PUT /accounts/{aid}/workers/scripts/{name}）。
+
+        使用 multipart/form-data：metadata part（JSON）+ 主模块文件 part。
+        主模块必须作为文件（带 filename）上传，否则 CF 返回 10021。
+        """
+        if settings.CF_FAKE_MODE:
+            return {"id": "worker-fake", "script_name": script_name}
+
+        metadata: dict[str, Any] = {
+            "main_module": main_module_name,
+            "compatibility_date": compatibility_date,
+        }
+        if compatibility_flags:
+            metadata["compatibility_flags"] = compatibility_flags
+        if bindings:
+            metadata["bindings"] = bindings
+
+        files = {
+            "metadata": (
+                None,
+                json.dumps(metadata, ensure_ascii=False, separators=(",", ":")),
+                "application/json",
+            ),
+            main_module_name: (
+                main_module_name,
+                script_content,
+                "application/javascript+module",
+            ),
+        }
+
+        async with httpx.AsyncClient(
+            base_url=self._base_url,
+            timeout=_DEFAULT_TIMEOUT,
+            transport=self._transport,
+        ) as client:
+            try:
+                resp = await client.put(
+                    f"/accounts/{account_id}/workers/scripts/{script_name}",
+                    files=files,
+                    headers={
+                        "Authorization": f"Bearer {self._api_token}",
+                    },
+                )
+            except httpx.HTTPError as exc:
+                raise CloudflareError(f"调用 Cloudflare API 失败: {exc}") from exc
+
+        if resp.status_code >= 400:
+            raise CloudflareError(
+                f"Cloudflare Worker 部署失败 (HTTP {resp.status_code}): {resp.text}"
+            )
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {}
+        if isinstance(body, dict) and body.get("success") is False:
+            raise CloudflareError(
+                f"Cloudflare Worker 部署失败: {body.get('errors') or body}"
+            )
+        # 标准 CF 信封返回 result 字段；非标准则原样返回
+        if isinstance(body, dict) and "result" in body:
+            return body["result"] if isinstance(body["result"], dict) else {}
+        return body if isinstance(body, dict) else {}
+
+    async def set_worker_secret(
+        self,
+        account_id: str,
+        script_name: str,
+        secret_name: str,
+        secret_value: str,
+    ) -> dict[str, Any]:
+        """为 Worker 设置/更新 secret（PUT .../workers/scripts/{name}/secrets）。
+
+        body: ``{"name": secret_name, "text": secret_value, "type": "secret"}``。
+        secret 在 CF 端加密存储，dashboard 不可见。
+        """
+        if settings.CF_FAKE_MODE:
+            return {"name": secret_name}
+        payload = {
+            "name": secret_name,
+            "text": secret_value,
+            "type": "secret",
+        }
+        result = await self._request(
+            "PUT",
+            f"/accounts/{account_id}/workers/scripts/{script_name}/secrets",
+            json=payload,
+        )
+        return result if isinstance(result, dict) else {}

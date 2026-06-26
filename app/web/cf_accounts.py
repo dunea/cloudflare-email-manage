@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from app.dependencies import SessionDep
 from app.exceptions import AppException, NotFoundError
 from app.schemas.cf_account import CFAccountCreate, CFAccountRead, CFAccountUpdate
-from app.services import cf_account_service, domain_service
+from app.services import cf_account_service, domain_service, worker_deploy_service
 from app.web.deps import CurrentWebUser
 from app.web.templating import error_message, flash, render, render_error
 
@@ -24,6 +24,7 @@ TOKEN_PERMISSIONS = [
     ("Account:Email Routing Addresses:Edit", "目标地址管理"),
     ("Account:Email Send:Edit", "发件 Beta 权限"),
     ("Zone:Zone:Read", "读取域名信息"),
+    ("Account:Workers Scripts:Edit", "一键部署收件 Worker（可选）"),
 ]
 
 
@@ -173,6 +174,33 @@ async def sync_cf_account(
         flash(request, error_message(exc), "error")
         return RedirectResponse(f"/cf-accounts/{account_id}", status_code=303)
     flash(request, f"已同步 {len(domains)} 个域名", "success")
+    return RedirectResponse(f"/cf-accounts/{account_id}", status_code=303)
+
+
+@router.post("/cf-accounts/{account_id:int}/deploy-worker")
+async def deploy_worker(
+    request: Request,
+    user: CurrentWebUser,
+    session: SessionDep,
+    account_id: int,
+) -> Response:
+    """一键部署/更新账号级收件 Worker（含所有域名 catch-all 配置）。"""
+    try:
+        account = await cf_account_service.get_cf_account_or_404(
+            session, account_id, user
+        )
+        result = await worker_deploy_service.deploy_worker_for_account(
+            session, account
+        )
+    except AppException as exc:
+        flash(request, error_message(exc), "error")
+        return RedirectResponse(f"/cf-accounts/{account_id}", status_code=303)
+    domain_count = len(result.get("domains", []))
+    flash(
+        request,
+        f"Worker 「{result['worker_name']}」已部署/更新（{domain_count} 个域名）",
+        "success",
+    )
     return RedirectResponse(f"/cf-accounts/{account_id}", status_code=303)
 
 

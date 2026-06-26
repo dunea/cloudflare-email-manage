@@ -1,12 +1,15 @@
 """收件处理逻辑：Webhook 签名校验、入库与查询。
 
 Webhook 端点需校验签名：请求头 X-Webhook-Signature 为对原始请求体的
-HMAC-SHA256 十六进制摘要，密钥取自 CF_WEBHOOK_SECRET，使用常量时间比较。
+HMAC-SHA256 十六进制摘要，使用常量时间比较。
+签名密钥按收件地址的域名查找 Domain.webhook_secret（per-domain），
+未匹配时回退到全局 CF_WEBHOOK_SECRET（兼容旧部署）。
 收到的邮件按 to_address 是否归属当前用户的邮箱地址进行隔离查询。
 """
 
 import hashlib
 import hmac
+import json
 
 from pydantic import ValidationError
 from sqlalchemy import func, select
@@ -15,33 +18,73 @@ from sqlalchemy.sql import Select
 
 from app.config import settings
 from app.exceptions import AppException, AuthError, NotFoundError
-from app.models import EmailAddress, InboundEmail, User
+from app.models import Domain, EmailAddress, InboundEmail, User
 from app.schemas.inbound_email import InboundEmailPayload
 
 # Webhook 签名请求头名称
 WEBHOOK_SIGNATURE_HEADER = "X-Webhook-Signature"
 
 
-def _expected_signature(raw_body: bytes) -> str:
-    """根据 CF_WEBHOOK_SECRET 计算请求体的 HMAC-SHA256 十六进制摘要。"""
+def _expected_signature(raw_body: bytes, secret: str) -> str:
+    """根据指定密钥计算请求体的 HMAC-SHA256 十六进制摘要。"""
     return hmac.new(
-        settings.CF_WEBHOOK_SECRET.encode("utf-8"), raw_body, hashlib.sha256
+        secret.encode("utf-8"), raw_body, hashlib.sha256
     ).hexdigest()
 
 
-def verify_signature(raw_body: bytes, signature: str | None) -> bool:
+def verify_signature(raw_body: bytes, signature: str | None, secret: str) -> bool:
     """常量时间比较 Webhook 签名是否匹配。"""
     if not signature:
         return False
-    return hmac.compare_digest(_expected_signature(raw_body), signature)
+    return hmac.compare_digest(_expected_signature(raw_body, secret), signature)
+
+
+def _peek_to_address(raw_body: bytes) -> str:
+    """从原始请求体中安全地读取 to 字段（仅用于定位签名密钥，不信任）。"""
+    try:
+        data = json.loads(raw_body)
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    to = data.get("to")
+    return str(to) if to is not None else ""
+
+
+def _extract_domain_part(to_address: str) -> str:
+    """从收件地址中提取域名（小写），失败返回空串。"""
+    if not to_address or "@" not in to_address:
+        return ""
+    return to_address.rsplit("@", 1)[1].strip().lower()
+
+
+async def _resolve_secret(session: AsyncSession, to_address: str) -> str:
+    """根据收件地址域名查找签名密钥，未匹配则回退到全局密钥。"""
+    domain_part = _extract_domain_part(to_address)
+    if domain_part:
+        stmt = select(Domain.webhook_secret).where(
+            func.lower(Domain.domain_name) == domain_part
+        )
+        result = (await session.execute(stmt)).scalar_one_or_none()
+        if result:
+            return result
+    return settings.CF_WEBHOOK_SECRET
 
 
 async def process_webhook(
     session: AsyncSession, raw_body: bytes, signature: str | None
 ) -> InboundEmail:
-    """校验签名、解析载荷并存储收到的邮件。"""
-    if not verify_signature(raw_body, signature):
+    """校验签名、解析载荷并存储收到的邮件。
+
+    先从请求体中读取 to 字段以定位签名密钥，再校验签名，
+    最后用 Pydantic 严格解析载荷入库。
+    """
+    to_address = _peek_to_address(raw_body)
+    secret = await _resolve_secret(session, to_address)
+
+    if not verify_signature(raw_body, signature, secret):
         raise AuthError("Webhook 签名校验失败")
+
     try:
         payload = InboundEmailPayload.model_validate_json(raw_body)
     except ValidationError as exc:

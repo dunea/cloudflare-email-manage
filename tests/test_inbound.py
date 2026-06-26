@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import InboundEmail
+from app.models import CFAccount, Domain, InboundEmail, User
 from app.services.cloudflare import CloudflareClient
 
 # 模拟 CF 返回的 Zone 列表
@@ -90,8 +90,22 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(CloudflareClient, "list_zones", _fake_list_zones)
 
 
-async def _setup_email_address(client: AsyncClient, token: str) -> str:
-    """绑定并同步域名、创建邮箱地址，返回 full_address。"""
+async def _setup_email_address(
+    client: AsyncClient,
+    token: str,
+    db_session: AsyncSession | None = None,
+) -> str:
+    """绑定并同步域名、创建邮箱地址，返回 full_address。
+
+    同步会为域名生成 per-domain webhook_secret；若传入 ``db_session``，
+    额外将其置空，以模拟「旧部署 Worker 用全局 CF_WEBHOOK_SECRET」的场景，
+    使现有 webhook 测试仍走全局签名校验（inbound_service 在
+    domain.webhook_secret 为空时回退到全局密钥）。
+    """
+    from sqlalchemy import select
+
+    from app.models import CFAccount, Domain
+
     bind = await client.post(
         "/api/v1/cf-accounts",
         headers=_auth(token),
@@ -111,6 +125,15 @@ async def _setup_email_address(client: AsyncClient, token: str) -> str:
         headers=_auth(token),
         json={"domain_id": domain_id, "local_part": "hello"},
     )
+    if db_session is not None:
+        rows = (
+            await db_session.execute(
+                select(Domain).join(CFAccount).where(CFAccount.id == account_id)
+            )
+        ).scalars().all()
+        for d in rows:
+            d.webhook_secret = None
+        await db_session.commit()
     return created.json()["data"]["full_address"]
 
 
@@ -176,12 +199,14 @@ async def test_webhook_invalid_payload(client: AsyncClient) -> None:
 
 
 async def test_list_inbound_isolation(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """用户仅能看到发往自己邮箱地址的邮件。"""
     _patch_cf(monkeypatch)
     token_a = await _register_and_login(client)
-    await _setup_email_address(client, token_a)
+    await _setup_email_address(client, token_a, db_session)
     await _post_webhook(
         client,
         {"to": "hello@example.com", "from": "x@y.com", "subject": "s", "text": "t"},
@@ -199,12 +224,14 @@ async def test_list_inbound_isolation(
 
 
 async def test_get_inbound_email(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """按 id 获取归属于本人的收件邮件。"""
     _patch_cf(monkeypatch)
     token = await _register_and_login(client)
-    await _setup_email_address(client, token)
+    await _setup_email_address(client, token, db_session)
     webhook = await _post_webhook(
         client,
         {"to": "hello@example.com", "from": "x@y.com", "subject": "s", "text": "t"},
@@ -217,12 +244,14 @@ async def test_get_inbound_email(
 
 
 async def test_get_inbound_isolation(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """他人无法按 id 获取不属于自己的邮件。"""
     _patch_cf(monkeypatch)
     token_a = await _register_and_login(client)
-    await _setup_email_address(client, token_a)
+    await _setup_email_address(client, token_a, db_session)
     webhook = await _post_webhook(
         client,
         {"to": "hello@example.com", "from": "x@y.com", "subject": "s", "text": "t"},
@@ -246,12 +275,14 @@ async def test_list_requires_auth(client: AsyncClient) -> None:
 
 
 async def test_webhook_normalizes_to_address_case(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Webhook 传入混合大小写 to 地址，入库后统一为小写，归属匹配正常。"""
     _patch_cf(monkeypatch)
     token = await _register_and_login(client)
-    await _setup_email_address(client, token)
+    await _setup_email_address(client, token, db_session)
 
     # 创建的邮箱为 hello@example.com，Webhook 传入 Hello@example.com
     resp = await _post_webhook(
@@ -282,3 +313,126 @@ async def test_webhook_normalizes_to_address_case(
     )
     assert filtered.status_code == 200
     assert filtered.json()["data"]["total"] == 1
+
+
+# ---- per-domain webhook_secret 签名校验 ----
+
+
+async def _make_domain(
+    db_session: AsyncSession,
+    *,
+    domain_name: str = "example.com",
+    webhook_secret: str | None = "domain-secret-xyz",
+) -> Domain:
+    """直接构造 CFAccount + Domain（绕过 CF API），用于 webhook_secret 测试。"""
+    from app.services.crypto import encrypt_token
+
+    user = User(
+        username=f"u_{domain_name.replace('.', '_')}",
+        email=f"{domain_name}@test.local",
+        hashed_password="x",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    cf_account = CFAccount(
+        user_id=user.id,
+        name="t",
+        encrypted_api_token=encrypt_token("tok"),
+        account_id="acc-test",
+    )
+    db_session.add(cf_account)
+    await db_session.flush()
+    domain = Domain(
+        cf_account_id=cf_account.id,
+        zone_id=f"zone-{domain_name}",
+        domain_name=domain_name,
+        status="active",
+        webhook_secret=webhook_secret,
+    )
+    db_session.add(domain)
+    await db_session.commit()
+    await db_session.refresh(domain)
+    return domain
+
+
+async def test_webhook_per_domain_secret_valid(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """域名有 webhook_secret 时，用该密钥签名通过；用全局密钥则失败。"""
+    await _make_domain(db_session, webhook_secret="per-domain-key-001")
+
+    body = json.dumps(
+        {"to": "anyone@example.com", "from": "s@x.com", "subject": "t", "text": "x"}
+    ).encode("utf-8")
+    sig = hmac.new(b"per-domain-key-001", body, hashlib.sha256).hexdigest()
+    resp = await client.post(
+        "/api/v1/inbound/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Webhook-Signature": sig,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["code"] == 0
+
+
+async def test_webhook_per_domain_secret_wrong_global_rejected(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """域名有 webhook_secret 时，用全局密钥签名应被拒绝。"""
+    await _make_domain(db_session, webhook_secret="per-domain-key-002")
+
+    body = json.dumps(
+        {"to": "a@example.com", "from": "s@x.com", "subject": "t", "text": "x"}
+    ).encode("utf-8")
+    # 用全局 CF_WEBHOOK_SECRET 签名（与域名密钥不一致）
+    sig = _sign(body)
+    resp = await client.post(
+        "/api/v1/inbound/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Webhook-Signature": sig,
+        },
+    )
+    assert resp.status_code == 401
+
+
+async def test_webhook_fallback_global_when_domain_has_no_secret(
+    client: AsyncClient,
+) -> None:
+    """域名 webhook_secret 为空（或域名不在 DB）时回退到全局密钥校验。"""
+    body = json.dumps(
+        {"to": "ghost@unknown.com", "from": "s@x.com", "subject": "t", "text": "x"}
+    ).encode("utf-8")
+    resp = await client.post(
+        "/api/v1/inbound/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Webhook-Signature": _sign(body),
+        },
+    )
+    assert resp.status_code == 200
+
+
+async def test_webhook_domain_secret_case_insensitive(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """域名匹配大小写不敏感：to 用大写域名也能命中 DB 中的小写域名 secret。"""
+    await _make_domain(db_session, webhook_secret="case-key", domain_name="Mixed.COM")
+
+    body = json.dumps(
+        {"to": "x@MIXED.com", "from": "s@x.com", "subject": "t", "text": "x"}
+    ).encode("utf-8")
+    sig = hmac.new(b"case-key", body, hashlib.sha256).hexdigest()
+    resp = await client.post(
+        "/api/v1/inbound/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Webhook-Signature": sig,
+        },
+    )
+    assert resp.status_code == 200
