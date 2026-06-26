@@ -18,6 +18,15 @@ import httpx
 from app.config import settings
 from app.exceptions import CloudflareError
 
+_FAKE_DESTINATION_VERIFIED_AT = "2026-06-26T08:00:00Z"
+_fake_destination_addresses: dict[str, dict[str, dict[str, str]]] = {}
+
+
+def _fake_destination_id(email: str) -> str:
+    """根据邮箱生成稳定的假 CF 目标地址 ID。"""
+    return "fake-dest-" + email.lower().replace("@", "-at-").replace(".", "-")
+
+
 # ---- Worker 部署相关响应 TypedDict ----
 
 
@@ -343,11 +352,8 @@ class CloudflareClient:
         """
         if settings.CF_FAKE_MODE:
             return [
-                {
-                    "id": "dest-e2e",
-                    "email": "dest@example.com",
-                    "verified": "2026-06-26T08:00:00Z",
-                }
+                dict(item)
+                for item in _fake_destination_addresses.get(account_id, {}).values()
             ]
         result = await self._request(
             "GET", f"/accounts/{account_id}/email/routing/addresses"
@@ -369,15 +375,19 @@ class CloudflareClient:
     ) -> dict[str, Any]:
         """创建一个转发目标地址（需被验证后才可用）。
 
-        CF 会向该邮箱发送验证邮件，返回结果含 ``id`` / ``email`` / ``verified``
-        （verified 创建时为 None，表示待验证）。
+        CF 会向该邮箱发送验证邮件，返回结果含 ``id`` / ``email`` / ``verified``。
+        真实 CF 中 ``verified`` 通常为 None；假 CF 模式返回固定时间戳。
         """
         if settings.CF_FAKE_MODE:
-            return {
-                "id": "dest-e2e",
-                "email": email,
-                "verified": "2026-06-26T08:00:00Z",
+            normalized_email = email.lower()
+            address_id = _fake_destination_id(normalized_email)
+            item = {
+                "id": address_id,
+                "email": normalized_email,
+                "verified": _FAKE_DESTINATION_VERIFIED_AT,
             }
+            _fake_destination_addresses.setdefault(account_id, {})[address_id] = item
+            return dict(item)
         result = await self._request(
             "POST",
             f"/accounts/{account_id}/email/routing/addresses",
@@ -393,6 +403,7 @@ class CloudflareClient:
         删除后 CF 会自动停用引用该地址的路由规则。
         """
         if settings.CF_FAKE_MODE:
+            _fake_destination_addresses.get(account_id, {}).pop(address_id, None)
             return {"id": address_id}
         result = await self._request(
             "DELETE",

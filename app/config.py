@@ -90,12 +90,27 @@ def _is_public_https_url(value: str) -> bool:
     """校验 URL 是否为公网 HTTPS 地址。"""
     parsed = urlparse(value.strip())
     host = parsed.hostname
-    if host is None or parsed.scheme != "https" or host.lower() == "localhost":
+    if host is None or parsed.scheme != "https":
+        return False
+    host = host.rstrip(".").lower()
+    if host in {"localhost", "localtest.me"}:
         return False
     try:
         ip = ip_address(host)
     except ValueError:
-        return True
+        blocked_suffixes = (
+            ".local",
+            ".internal",
+            ".localhost",
+            ".test",
+            ".localtest.me",
+        )
+        labels = host.split(".")
+        return (
+            len(labels) >= 2
+            and all(labels)
+            and not host.endswith(blocked_suffixes)
+        )
     return ip.is_global and not ip.is_multicast and not ip.is_unspecified
 
 

@@ -16,14 +16,29 @@
         get currentAccount() { return this.emailAccount[String(this.selectedEmail)] || "" },
         get availableDests() {
           const list = this.destsByAccount[this.currentAccount] || [];
-          return list.map(d => ({ value: d.email, label: d.email }));
+          return list.map(function(d) { return { email: d.email }; });
+        },
+        renderDests() {
+          const select = this.$refs.destinationSelect;
+          const currentValue = select.value;
+          select.replaceChildren();
+          this.availableDests.forEach(function(d) {
+            const option = document.createElement('option');
+            option.value = d.email;
+            option.textContent = d.email;
+            select.appendChild(option);
+          });
+          if (this.availableDests.some(function(d) { return d.email === currentValue; })) {
+            select.value = currentValue;
+          }
         }
       }"
+      x-init="renderDests()"
       class="mb-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
   <div class="min-w-[200px] flex-1">
     <label class="mb-1 block text-sm font-medium text-slate-700">源邮箱地址</label>
-    <select name="email_address_id" required x-model="selectedEmail"
+    <select name="email_address_id" required x-model="selectedEmail" @change="renderDests()"
             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
       <option value="" disabled selected>请选择</option>
       {% for o in options %}
@@ -34,9 +49,10 @@
   <div class="flex items-end pb-2 text-slate-400">→</div>
   <div class="min-w-[200px] flex-1">
     <label class="mb-1 block text-sm font-medium text-slate-700">转发目标邮箱</label>
-    <select name="destination_email" required
+    <select name="destination_email" required x-ref="destinationSelect"
             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
-      {% for d in dest_options %}
+      {% set initial_account = email_account.get(options[0].id|string) if options else "" %}
+      {% for d in dests_by_account.get(initial_account, []) %}
       <option value="{{ d.email }}">{{ d.email }}</option>
       {% endfor %}
     </select>

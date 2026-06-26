@@ -10,6 +10,7 @@ import json
 import httpx
 import pytest
 
+from app.config import settings
 from app.exceptions import CloudflareError
 from app.services.cloudflare import CloudflareClient, WorkerBinding
 
@@ -147,6 +148,27 @@ async def test_send_email_uses_email_sending_rest_endpoint() -> None:
     assert url.endswith("/accounts/acc1/email/sending/send")
     assert captured["body"] == payload
     assert result["success"] is True
+
+
+async def test_fake_destination_addresses_follow_create_delete_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """假 CF 目标地址列表只反映 create/delete 后的状态。"""
+    monkeypatch.setattr(settings, "CF_FAKE_MODE", True)
+    cf = CloudflareClient("tok")
+    account_id = "acc-fake-destination-state"
+
+    assert await cf.list_destination_addresses(account_id) == []
+
+    created = await cf.create_destination_address(account_id, "Dest@Example.com")
+    assert created["email"] == "dest@example.com"
+    assert created["verified"] == "2026-06-26T08:00:00Z"
+
+    listed = await cf.list_destination_addresses(account_id)
+    assert listed == [created]
+
+    await cf.delete_destination_address(account_id, created["id"])
+    assert await cf.list_destination_addresses(account_id) == []
 
 
 async def test_get_email_routing_status() -> None:

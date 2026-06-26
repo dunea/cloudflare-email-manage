@@ -82,12 +82,12 @@ def render(
         "app_name": settings.APP_NAME,
         "app_version": settings.APP_VERSION,
         "app_description": APP_DESCRIPTION,
-        "csrf_token": get_csrf_token(request),
         "active": active,
         "layout": None,
         "flashes": pop_flashes(request),
     }
     base_context.update(context)
+    base_context["csrf_token"] = get_csrf_token(request)
     return templates.TemplateResponse(
         request, template, base_context, status_code=status_code
     )
