@@ -4,7 +4,7 @@
 此处直接使用 bcrypt 库完成密码哈希与校验。
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import bcrypt
 from jose import JWTError, jwt
@@ -43,7 +43,7 @@ def verify_password(password: str, hashed: str) -> bool:
 
 def _create_token(user_id: int, token_type: str, expires_delta: timedelta) -> str:
     """生成指定类型的 JWT 令牌。"""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload: dict[str, object] = {
         "sub": str(user_id),
         "type": token_type,

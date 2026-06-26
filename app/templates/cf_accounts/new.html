@@ -9,6 +9,7 @@
 <div class="grid gap-6 lg:grid-cols-3">
   <form method="post" action="/cf-accounts"
         class="space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
     <div>
       <label class="mb-1 block text-sm font-medium text-slate-700">名称</label>
       <input name="name" value="{{ form.name | default('') }}" required maxlength="128"

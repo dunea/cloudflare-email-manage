@@ -7,14 +7,13 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+# 导入 models 包以确保所有模型注册到 Base.metadata
+import app.models  # noqa: F401
 from alembic import context
 
 # 导入配置与模型元数据
 from app.config import settings
 from app.database import Base
-
-# 导入 models 包以确保所有模型注册到 Base.metadata
-import app.models  # noqa: F401
 
 # Alembic Config 对象
 config = context.config

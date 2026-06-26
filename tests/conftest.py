@@ -3,8 +3,9 @@
 测试隔离：每个测试用例使用独立的 SQLite 内存数据库，互不干扰。
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -14,6 +15,15 @@ from sqlalchemy.pool import StaticPool
 import app.models  # noqa: F401
 from app.database import Base, get_session
 from app.main import app
+from app.services.cloudflare import _reset_fake_destination_addresses
+
+
+@pytest.fixture(autouse=True)
+def reset_fake_cloudflare_state() -> Iterator[None]:
+    """每个测试前后清理假 CF 内存状态。"""
+    _reset_fake_destination_addresses()
+    yield
+    _reset_fake_destination_addresses()
 
 
 @pytest_asyncio.fixture

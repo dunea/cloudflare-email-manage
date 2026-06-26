@@ -4,13 +4,22 @@ CF 调用（create/delete routing rule、send_email）通过 monkeypatch 替换�
 """
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import CFAccount, Domain, EmailAddress, ForwardingRule, InboundEmail, User
+from app.models import (
+    CFAccount,
+    DestinationAddress,
+    Domain,
+    EmailAddress,
+    ForwardingRule,
+    InboundEmail,
+    User,
+)
 from app.services.cloudflare import CloudflareClient
 from app.services.crypto import encrypt_token
 
@@ -162,6 +171,60 @@ async def test_create_forwarding_invalid_destination(
     assert rows == []
     listing = await client.get("/forwarding-rules")
     assert "输入有误" in listing.text
+
+
+async def test_forwarding_form_filters_destinations_by_selected_account(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """转发规则表单使用当前源邮箱所属账号过滤目标地址。"""
+    await _web_login(client)
+    user = await _get_user(db_session)
+    addr = await _seed_email(db_session, user.id)
+    source_domain = (
+        await db_session.execute(select(Domain).where(Domain.id == addr.domain_id))
+    ).scalar_one()
+
+    other_cf = CFAccount(
+        user_id=user.id,
+        name="other",
+        encrypted_api_token=encrypt_token("t2"),
+        account_id="acc-2",
+    )
+    db_session.add(other_cf)
+    await db_session.commit()
+    await db_session.refresh(other_cf)
+
+    db_session.add_all(
+        [
+            DestinationAddress(
+                cf_account_id=source_domain.cf_account_id,
+                user_id=user.id,
+                email="good@example.com",
+                cf_address_id="cf-dest-good",
+                verified=True,
+                verified_at=datetime.now(UTC),
+            ),
+            DestinationAddress(
+                cf_account_id=other_cf.id,
+                user_id=user.id,
+                email="wrong@example.com",
+                cf_address_id="cf-dest-wrong",
+                verified=True,
+                verified_at=datetime.now(UTC),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    listing = await client.get("/forwarding-rules")
+
+    assert 'x-ref="destinationSelect"' in listing.text
+    assert "renderDests()" in listing.text
+    assert "{% for d in dest_options %}" not in listing.text
+    assert "destsByAccount" in listing.text
+    assert '<option value="good@example.com">' in listing.text
+    assert '<option value="wrong@example.com">' not in listing.text
+    assert "wrong@example.com" in listing.text
 
 
 async def test_toggle_and_delete_forwarding_rule(

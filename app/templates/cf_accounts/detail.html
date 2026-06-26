@@ -9,16 +9,19 @@
   </div>
   <div class="flex gap-2">
     <form method="post" action="/cf-accounts/{{ account.id }}/sync">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
       <button type="submit"
               class="rounded-lg border border-brand px-4 py-2 text-sm font-semibold text-brand hover:bg-brand/5">同步域名</button>
     </form>
     <form method="post" action="/cf-accounts/{{ account.id }}/deploy-worker"
           x-data @submit.prevent="$store.confirm.ask($el, '将自动部署收件 Worker 到你的 CF 账号，并配置所有域名的 catch-all。需 Token 具备 Account:Workers Scripts:Edit 权限。是否继续？')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
       <button type="submit"
               class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">一键部署 Worker</button>
     </form>
     <form method="post" action="/cf-accounts/{{ account.id }}/delete"
           x-data @submit.prevent="$store.confirm.ask($el, '确定解绑该 CF 账号？此操作不可撤销。')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
       <button type="submit"
               class="rounded-lg border border-red-300 px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-50">解绑</button>
     </form>
@@ -47,6 +50,7 @@
   <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
     <h3 class="mb-4 font-semibold text-slate-800">编辑</h3>
     <form method="post" action="/cf-accounts/{{ account.id }}/edit" class="space-y-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
       <div>
         <label class="mb-1 block text-sm font-medium text-slate-700">名称</label>
         <input name="name" value="{{ account.name }}" required maxlength="128"

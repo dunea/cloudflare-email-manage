@@ -100,8 +100,9 @@ async def _setup_email_address(
     同步阶段不再自动生成 webhook_secret（由 worker_deploy_service 统一管理），
     新建的 Domain.webhook_secret 默认 NULL，使本 helper 默认走全局签名校验。
     """
-    from app.models import CFAccount, Domain
     from sqlalchemy import select
+
+    from app.models import CFAccount, Domain
 
     bind = await client.post(
         "/api/v1/cf-accounts",

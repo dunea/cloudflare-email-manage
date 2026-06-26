@@ -1,8 +1,12 @@
 """自定义异常与全局异常处理器。"""
 
+import logging
+
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 
 class AppException(Exception):
@@ -78,8 +82,12 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def _handle_unexpected_error(_: Request, exc: Exception) -> JSONResponse:
+        logger.error(
+            "未处理的服务器异常",
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
         return _error_response(
             code=1500,
-            message=f"服务器内部错误: {exc}",
+            message="服务器内部错误",
             http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )

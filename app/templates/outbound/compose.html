@@ -12,6 +12,7 @@
 
 {% if senders %}
 <form method="post" action="/outbound" class="max-w-2xl space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
   <div>
     <label class="mb-1 block text-sm font-medium text-slate-700">发件人</label>
     <select name="from_address" required

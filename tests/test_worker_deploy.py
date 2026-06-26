@@ -18,10 +18,9 @@ import app.models  # noqa: F401  确保模型注册
 from app.config import settings
 from app.exceptions import AppException
 from app.models import CFAccount, Domain, User
+from app.services import worker_deploy_service
 from app.services.cloudflare import CloudflareClient
 from app.services.crypto import encrypt_token
-from app.services import worker_deploy_service
-
 
 # ---- helpers ----
 
@@ -296,6 +295,7 @@ async def test_api_deploy_worker_success(
     )
     # 查询注册用户的 id，并为其建 cf_account + domain
     from sqlalchemy import select as _sel
+
     from app.models import User as _U
 
     user = (
@@ -363,8 +363,9 @@ async def test_web_deploy_worker_form_success(
     """Web 表单 POST 一键部署 → 303 重定向 + flash。"""
     _patch_deploy_ok(monkeypatch)
     # 直接在 DB 造一个账号（不通过 HTTP 绑定以避免与 _patch_deploy_ok 冲突）
+    from app.models import CFAccount as _CFA
+    from app.models import Domain as _D
     from app.services.crypto import encrypt_token as _enc
-    from app.models import CFAccount as _CFA, Domain as _D
 
     user = User(
         username="webuser",

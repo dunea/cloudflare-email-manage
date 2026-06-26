@@ -6,7 +6,7 @@ API Key 为高熵随机串，仅存储其 SHA-256 哈希（确定性哈希以支
 
 import hashlib
 import secrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -123,6 +123,6 @@ async def authenticate_api_key(session: AsyncSession, raw_key: str) -> User:
         raise AuthError("用户不存在或已被禁用")
 
     # 记录最近一次使用时间（tz-aware UTC）
-    api_key.last_used_at = datetime.now(timezone.utc)
+    api_key.last_used_at = datetime.now(UTC)
     await session.commit()
     return user

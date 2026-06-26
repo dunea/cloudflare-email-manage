@@ -6,6 +6,7 @@
   <p class="mb-6 text-sm text-slate-500">登录以管理你的 Cloudflare 邮箱</p>
 
   <form method="post" action="/login" class="space-y-4" x-data="{ show: false }">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
     <input type="hidden" name="next" value="{{ form.next | default('/dashboard') }}" />
     <div>
       <label class="mb-1 block text-sm font-medium text-slate-700">用户名或邮箱</label>

@@ -1,13 +1,9 @@
 """通用 Pydantic 模型：统一响应格式与分页。"""
 
-from typing import Generic, TypeVar
-
 from pydantic import BaseModel, ConfigDict, Field
 
-T = TypeVar("T")
 
-
-class ApiResponse(BaseModel, Generic[T]):
+class ApiResponse[T](BaseModel):
     """统一 API 响应格式：{"code": 0, "data": ..., "message": "ok"}。"""
 
     model_config = ConfigDict(from_attributes=True)
@@ -24,7 +20,7 @@ class PageParams(BaseModel):
     size: int = Field(default=20, ge=1, le=100)
 
 
-class PageData(BaseModel, Generic[T]):
+class PageData[T](BaseModel):
     """分页响应数据。"""
 
     model_config = ConfigDict(from_attributes=True)

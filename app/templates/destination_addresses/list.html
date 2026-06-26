@@ -10,6 +10,7 @@
 {% if accounts %}
 <form method="post" action="/destination-addresses"
       class="mb-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
   <div class="min-w-[200px] flex-1">
     <label class="mb-1 block text-sm font-medium text-slate-700">所属 CF 账号</label>
     <select name="cf_account_id" required
@@ -28,6 +29,7 @@
 </form>
 
 <form method="post" action="/destination-addresses/sync" class="mb-4 flex items-center gap-3">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
   <label class="text-sm text-slate-600">同步账号</label>
   <select name="cf_account_id"
           class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
@@ -66,6 +68,7 @@
           <div class="flex items-center justify-end gap-3">
             <form method="post" action="/destination-addresses/{{ a.id }}/delete"
                   x-data @submit.prevent="$store.confirm.ask($el, '确定删除该目标地址？引用它的转发规则会被停用。')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
               <button type="submit" class="text-sm font-medium text-red-600 hover:underline">删除</button>
             </form>
           </div>
