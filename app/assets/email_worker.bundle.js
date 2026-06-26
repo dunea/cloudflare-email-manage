@@ -3860,8 +3860,11 @@ function parseSecrets(raw) {
       const out = {};
       for (const key of Object.keys(obj)) {
         const value = obj[key];
-        if (typeof value === "string") {
-          out[key.toLowerCase()] = value;
+        if (value && typeof value === "object" && typeof value.zone_id === "string" && typeof value.secret === "string") {
+          out[key.toLowerCase()] = {
+            zone_id: value.zone_id,
+            secret: value.secret
+          };
         }
       }
       return out;
@@ -3892,8 +3895,8 @@ var index_default = {
       return;
     }
     const domain = extractDomain(message.to);
-    const secret = domain ? webhookSecrets[domain] : void 0;
-    if (!secret) {
+    const entry = domain ? webhookSecrets[domain] : void 0;
+    if (!entry) {
       console.error(`\u672A\u627E\u5230\u57DF\u540D ${domain} \u5BF9\u5E94\u7684\u7B7E\u540D\u5BC6\u94A5`);
       message.setReject("\u8BE5\u57DF\u540D\u672A\u914D\u7F6E\u6536\u4EF6");
       return;
@@ -3910,12 +3913,13 @@ var index_default = {
     const payload = {
       to: message.to,
       from: message.from,
+      zone_id: entry.zone_id,
       subject: parsed.subject || "",
       text: parsed.text || "",
       html: parsed.html || ""
     };
     const bodyBytes = new TextEncoder().encode(JSON.stringify(payload));
-    const signature = await hmacSha256Hex(secret, bodyBytes);
+    const signature = await hmacSha256Hex(entry.secret, bodyBytes);
     try {
       const resp = await fetch(webhookUrl, {
         method: "POST",

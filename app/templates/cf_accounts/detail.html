@@ -12,10 +12,9 @@
       <button type="submit"
               class="rounded-lg border border-brand px-4 py-2 text-sm font-semibold text-brand hover:bg-brand/5">同步域名</button>
     </form>
-    <form method="post" action="/cf-accounts/{{ account.id }}/deploy-worker">
+    <form method="post" action="/cf-accounts/{{ account.id }}/deploy-worker"
+          x-data @submit.prevent="$store.confirm.ask($el, '将自动部署收件 Worker 到你的 CF 账号，并配置所有域名的 catch-all。需 Token 具备 Account:Workers Scripts:Edit 权限。是否继续？')">
       <button type="submit"
-              x-data
-              @click.prevent="$store.confirm.ask($el, '将自动部署收件 Worker 到你的 CF 账号，并配置所有域名的 catch-all。需 Token 具备 Account:Workers Scripts:Edit 权限。是否继续？')"
               class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">一键部署 Worker</button>
     </form>
     <form method="post" action="/cf-accounts/{{ account.id }}/delete"

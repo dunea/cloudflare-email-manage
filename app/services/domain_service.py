@@ -4,8 +4,6 @@
 共享：域名所有者可将域名共享给其他用户使用。
 """
 
-import secrets
-
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +17,12 @@ from app.services.user_service import get_user_by_username
 async def sync_domains(
     session: AsyncSession, cf_account: CFAccount, owner: User
 ) -> list[Domain]:
-    """从 CF 同步 cf_account 下的域名，返回同步后的域名列表。"""
+    """从 CF 同步 cf_account 下的域名，返回同步后的域名列表。
+
+    同步阶段不生成 webhook_secret，留待一键部署 Worker 时由
+    worker_deploy_service._prepare_domain_secrets 统一生成，
+    避免部署失败时出现"DB 已写但 Worker 未下发"的半成品状态。
+    """
     client = build_client(cf_account)
     zones = await client.list_zones()
 
@@ -46,7 +49,6 @@ async def sync_domains(
                 zone_id=zone_id,
                 domain_name=domain_name,
                 status=status,
-                webhook_secret=secrets.token_urlsafe(32),
             )
             session.add(domain)
             synced.append(domain)

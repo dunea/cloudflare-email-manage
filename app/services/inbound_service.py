@@ -2,7 +2,8 @@
 
 Webhook 端点需校验签名：请求头 X-Webhook-Signature 为对原始请求体的
 HMAC-SHA256 十六进制摘要，使用常量时间比较。
-签名密钥按收件地址的域名查找 Domain.webhook_secret（per-domain），
+签名密钥按收件地址的域名 + 载荷中的 zone_id 唯一定位 Domain.webhook_secret
+（per-domain，且天然避开多账号同名域名歧义），
 未匹配时回退到全局 CF_WEBHOOK_SECRET（兼容旧部署）。
 收到的邮件按 to_address 是否归属当前用户的邮箱地址进行隔离查询。
 """
@@ -39,16 +40,26 @@ def verify_signature(raw_body: bytes, signature: str | None, secret: str) -> boo
     return hmac.compare_digest(_expected_signature(raw_body, secret), signature)
 
 
-def _peek_to_address(raw_body: bytes) -> str:
-    """从原始请求体中安全地读取 to 字段（仅用于定位签名密钥，不信任）。"""
+def _peek_field(raw_body: bytes, field: str) -> str:
+    """从原始请求体中安全地读取指定字段（仅用于定位签名密钥，不信任）。"""
     try:
         data = json.loads(raw_body)
     except (ValueError, TypeError):
         return ""
     if not isinstance(data, dict):
         return ""
-    to = data.get("to")
-    return str(to) if to is not None else ""
+    value = data.get(field)
+    return str(value) if value is not None else ""
+
+
+def _peek_to_address(raw_body: bytes) -> str:
+    """从原始请求体中安全地读取 to 字段（仅用于定位签名密钥，不信任）。"""
+    return _peek_field(raw_body, "to")
+
+
+def _peek_zone_id(raw_body: bytes) -> str:
+    """从原始请求体中安全地读取 zone_id 字段（仅用于定位签名密钥，不信任）。"""
+    return _peek_field(raw_body, "zone_id")
 
 
 def _extract_domain_part(to_address: str) -> str:
@@ -58,27 +69,42 @@ def _extract_domain_part(to_address: str) -> str:
     return to_address.rsplit("@", 1)[1].strip().lower()
 
 
-async def _resolve_secret(session: AsyncSession, to_address: str) -> str:
-    """根据收件地址域名查找签名密钥，未匹配则回退到全局密钥。
+async def _resolve_secret(
+    session: AsyncSession, to_address: str, zone_id: str | None = None
+) -> str:
+    """根据 zone_id + 收件域名查找签名密钥，未匹配则回退到全局密钥。
 
-    域名可能跨账号同名（如管理员域名与用户域名均为 example.com）。
-    查询过滤掉 webhook_secret 为空的行，避免误命中未配置密钥的旧域名；
-    按 id 升序排序保证确定性，避免同一 to_address 在并发场景下选到不同行。
+    Worker 在 webhook 载荷中附带 zone_id（与签名 secret 同源），
+    平台按 ``(zone_id, domain_name)`` 唯一定位 Domain.webhook_secret，
+    避免多账号同名域名（如管理员与用户都绑了 example.com）时选错密钥。
+    旧部署 Worker 不传 zone_id 时，按域名降级匹配首条非空 secret
+    （保持向后兼容；新部署须经 worker_deploy_service 写入 zone_id）。
     """
     domain_part = _extract_domain_part(to_address)
     if domain_part:
-        stmt = (
-            select(Domain.webhook_secret)
-            .where(
+        if zone_id:
+            stmt = select(Domain.webhook_secret).where(
+                Domain.zone_id == zone_id,
                 func.lower(Domain.domain_name) == domain_part,
                 Domain.webhook_secret.is_not(None),
             )
-            .order_by(Domain.id)
-            .limit(1)
-        )
-        result = (await session.execute(stmt)).scalars().first()
-        if result:
-            return result
+            result = (await session.execute(stmt)).scalars().first()
+            if result:
+                return result
+        else:
+            # 旧 Worker 兼容：按域名降级匹配首条非空 secret
+            stmt = (
+                select(Domain.webhook_secret)
+                .where(
+                    func.lower(Domain.domain_name) == domain_part,
+                    Domain.webhook_secret.is_not(None),
+                )
+                .order_by(Domain.id)
+                .limit(1)
+            )
+            result = (await session.execute(stmt)).scalars().first()
+            if result:
+                return result
     return settings.CF_WEBHOOK_SECRET
 
 
@@ -87,11 +113,12 @@ async def process_webhook(
 ) -> InboundEmail:
     """校验签名、解析载荷并存储收到的邮件。
 
-    先从请求体中读取 to 字段以定位签名密钥，再校验签名，
+    先从请求体中读取 to/zone_id 字段以定位签名密钥，再校验签名，
     最后用 Pydantic 严格解析载荷入库。
     """
     to_address = _peek_to_address(raw_body)
-    secret = await _resolve_secret(session, to_address)
+    zone_id = _peek_zone_id(raw_body)
+    secret = await _resolve_secret(session, to_address, zone_id)
 
     if not verify_signature(raw_body, signature, secret):
         raise AuthError("Webhook 签名校验失败")

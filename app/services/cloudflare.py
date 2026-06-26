@@ -29,6 +29,25 @@ class EmailRoutingStatus(TypedDict):
     status: NotRequired[str]
 
 
+class EmailRoutingAction(TypedDict, total=False):
+    """Email Routing 规则 action（CF 文档常见字段）。
+
+    ``type`` 为 ``worker`` 时 ``value`` 为 ``list[str]``（Worker 名称）；
+    ``type`` 为 ``forward`` / ``email`` 时 ``value`` 为目标邮箱地址（字符串）。
+    """
+
+    type: str
+    value: list[str] | str
+
+
+class EmailRoutingMatcher(TypedDict, total=False):
+    """Email Routing 规则 matcher（CF 文档常见字段）。"""
+
+    type: str
+    field: NotRequired[str]
+    value: NotRequired[str]
+
+
 class CatchAllRule(TypedDict, total=False):
     """Zone catch-all 规则响应。
 
@@ -37,8 +56,8 @@ class CatchAllRule(TypedDict, total=False):
 
     id: str
     enabled: bool
-    actions: list[dict[str, Any]]
-    matchers: list[dict[str, Any]]
+    actions: list[EmailRoutingAction]
+    matchers: list[EmailRoutingMatcher]
 
 
 class WorkerBinding(TypedDict):

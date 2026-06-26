@@ -97,14 +97,11 @@ async def _setup_email_address(
 ) -> str:
     """绑定并同步域名、创建邮箱地址，返回 full_address。
 
-    同步会为域名生成 per-domain webhook_secret；若传入 ``db_session``，
-    额外将其置空，以模拟「旧部署 Worker 用全局 CF_WEBHOOK_SECRET」的场景，
-    使现有 webhook 测试仍走全局签名校验（inbound_service 在
-    domain.webhook_secret 为空时回退到全局密钥）。
+    同步阶段不再自动生成 webhook_secret（由 worker_deploy_service 统一管理），
+    新建的 Domain.webhook_secret 默认 NULL，使本 helper 默认走全局签名校验。
     """
-    from sqlalchemy import select
-
     from app.models import CFAccount, Domain
+    from sqlalchemy import select
 
     bind = await client.post(
         "/api/v1/cf-accounts",
@@ -358,11 +355,17 @@ async def _make_domain(
 async def test_webhook_per_domain_secret_valid(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """域名有 webhook_secret 时，用该密钥签名通过；用全局密钥则失败。"""
-    await _make_domain(db_session, webhook_secret="per-domain-key-001")
+    """域名有 webhook_secret 且 payload 含 zone_id 时，用该密钥签名通过。"""
+    domain = await _make_domain(db_session, webhook_secret="per-domain-key-001")
 
     body = json.dumps(
-        {"to": "anyone@example.com", "from": "s@x.com", "subject": "t", "text": "x"}
+        {
+            "to": "anyone@example.com",
+            "from": "s@x.com",
+            "zone_id": domain.zone_id,
+            "subject": "t",
+            "text": "x",
+        }
     ).encode("utf-8")
     sig = hmac.new(b"per-domain-key-001", body, hashlib.sha256).hexdigest()
     resp = await client.post(
@@ -381,10 +384,16 @@ async def test_webhook_per_domain_secret_wrong_global_rejected(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     """域名有 webhook_secret 时，用全局密钥签名应被拒绝。"""
-    await _make_domain(db_session, webhook_secret="per-domain-key-002")
+    domain = await _make_domain(db_session, webhook_secret="per-domain-key-002")
 
     body = json.dumps(
-        {"to": "a@example.com", "from": "s@x.com", "subject": "t", "text": "x"}
+        {
+            "to": "a@example.com",
+            "from": "s@x.com",
+            "zone_id": domain.zone_id,
+            "subject": "t",
+            "text": "x",
+        }
     ).encode("utf-8")
     # 用全局 CF_WEBHOOK_SECRET 签名（与域名密钥不一致）
     sig = _sign(body)
@@ -421,10 +430,18 @@ async def test_webhook_domain_secret_case_insensitive(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     """域名匹配大小写不敏感：to 用大写域名也能命中 DB 中的小写域名 secret。"""
-    await _make_domain(db_session, webhook_secret="case-key", domain_name="Mixed.COM")
+    domain = await _make_domain(
+        db_session, webhook_secret="case-key", domain_name="Mixed.COM"
+    )
 
     body = json.dumps(
-        {"to": "x@MIXED.com", "from": "s@x.com", "subject": "t", "text": "x"}
+        {
+            "to": "x@MIXED.com",
+            "from": "s@x.com",
+            "zone_id": domain.zone_id,
+            "subject": "t",
+            "text": "x",
+        }
     ).encode("utf-8")
     sig = hmac.new(b"case-key", body, hashlib.sha256).hexdigest()
     resp = await client.post(
@@ -441,14 +458,13 @@ async def test_webhook_domain_secret_case_insensitive(
 # ---- _resolve_secret 针对性测试 ----
 
 
-async def test_resolve_secret_skips_null_secret_row(
+async def test_resolve_secret_uses_zone_id(
     db_session: AsyncSession,
 ) -> None:
-    """_resolve_secret 跳过 webhook_secret 为 null 的行，fallback 全局密钥。"""
+    """_resolve_secret 按 (zone_id, domain_name) 唯一定位，避免跨账号同名域名歧义。"""
     from app.services import inbound_service
     from app.services.crypto import encrypt_token
 
-    # 建两个同名域名：一个 secret=null（应跳过），另一个 secret="kept"
     user = User(
         username="resuser1",
         email="r1@test.local",
@@ -464,33 +480,40 @@ async def test_resolve_secret_skips_null_secret_row(
     )
     db_session.add(cf_account)
     await db_session.flush()
-    d_null = Domain(
+    d_first = Domain(
         cf_account_id=cf_account.id,
         zone_id="z1",
         domain_name="dup.com",
         status="active",
-        webhook_secret=None,
+        webhook_secret="first-secret",
     )
-    db_session.add(d_null)
+    db_session.add(d_first)
     await db_session.flush()
-    d_kept = Domain(
+    d_second = Domain(
         cf_account_id=cf_account.id,
         zone_id="z2",
         domain_name="dup.com",
         status="active",
-        webhook_secret="kept-secret",
+        webhook_secret="second-secret",
     )
-    db_session.add(d_kept)
+    db_session.add(d_second)
     await db_session.commit()
 
-    secret = await inbound_service._resolve_secret(db_session, "x@dup.com")
-    assert secret == "kept-secret"
+    # 不同 zone_id 拿到不同 secret，不再歧义
+    assert (
+        await inbound_service._resolve_secret(db_session, "x@dup.com", "z1")
+        == "first-secret"
+    )
+    assert (
+        await inbound_service._resolve_secret(db_session, "x@dup.com", "z2")
+        == "second-secret"
+    )
 
 
-async def test_resolve_secret_falls_back_when_all_null(
+async def test_resolve_secret_falls_back_when_null(
     db_session: AsyncSession,
 ) -> None:
-    """同名域名全部 secret=null 时，_resolve_secret fallback 到全局密钥。"""
+    """zone_id 命中域名但 webhook_secret=null 时 fallback 全局密钥。"""
     from app.services import inbound_service
     from app.services.crypto import encrypt_token
 
@@ -509,25 +532,24 @@ async def test_resolve_secret_falls_back_when_all_null(
     )
     db_session.add(cf_account)
     await db_session.flush()
-    for i, zid in enumerate(["z1", "z2"], 1):
-        d = Domain(
-            cf_account_id=cf_account.id,
-            zone_id=zid,
-            domain_name="all-null.com",
-            status="active",
-            webhook_secret=None,
-        )
-        db_session.add(d)
+    d = Domain(
+        cf_account_id=cf_account.id,
+        zone_id="z1",
+        domain_name="null.com",
+        status="active",
+        webhook_secret=None,
+    )
+    db_session.add(d)
     await db_session.commit()
 
-    secret = await inbound_service._resolve_secret(db_session, "x@all-null.com")
+    secret = await inbound_service._resolve_secret(db_session, "x@null.com", "z1")
     assert secret == settings.CF_WEBHOOK_SECRET
 
 
-async def test_resolve_secret_deterministic_ordering(
+async def test_resolve_secret_falls_back_when_unknown_zone(
     db_session: AsyncSession,
 ) -> None:
-    """同名域名多 secret 时，按 id 升序选最早创建的行（确定性）。"""
+    """payload 中 zone_id 在 DB 中无匹配域名时 fallback 全局密钥。"""
     from app.services import inbound_service
     from app.services.crypto import encrypt_token
 
@@ -546,26 +568,64 @@ async def test_resolve_secret_deterministic_ordering(
     )
     db_session.add(cf_account)
     await db_session.flush()
-    # 第一个 flush 拿到最小 id，第二个 flush 拿到更大 id
-    d_first = Domain(
+    d = Domain(
         cf_account_id=cf_account.id,
-        zone_id="z-first",
-        domain_name="order.com",
+        zone_id="z-real",
+        domain_name="real.com",
         status="active",
-        webhook_secret="first-secret",
+        webhook_secret="real-secret",
     )
-    db_session.add(d_first)
-    await db_session.flush()
-    d_second = Domain(
-        cf_account_id=cf_account.id,
-        zone_id="z-second",
-        domain_name="order.com",
-        status="active",
-        webhook_secret="second-secret",
-    )
-    db_session.add(d_second)
+    db_session.add(d)
     await db_session.commit()
 
-    secret = await inbound_service._resolve_secret(db_session, "x@order.com")
-    # 按 id 升序，选最小 id 的行
-    assert secret == "first-secret"
+    # zone_id 不匹配 → fallback 全局密钥，避免拿错 secret
+    secret = await inbound_service._resolve_secret(
+        db_session, "x@real.com", "z-ghost"
+    )
+    assert secret == settings.CF_WEBHOOK_SECRET
+
+
+async def test_resolve_secret_legacy_no_zone_id(
+    db_session: AsyncSession,
+) -> None:
+    """旧 Worker 不传 zone_id 时，按域名降级匹配首条非空 secret（向后兼容）。"""
+    from app.services import inbound_service
+    from app.services.crypto import encrypt_token
+
+    user = User(
+        username="resuser4",
+        email="r4@test.local",
+        hashed_password="x",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    cf_account = CFAccount(
+        user_id=user.id,
+        name="t",
+        encrypted_api_token=encrypt_token("tok"),
+        account_id="acc-1",
+    )
+    db_session.add(cf_account)
+    await db_session.flush()
+    d_null = Domain(
+        cf_account_id=cf_account.id,
+        zone_id="z1",
+        domain_name="legacy.com",
+        status="active",
+        webhook_secret=None,
+    )
+    db_session.add(d_null)
+    await db_session.flush()
+    d_kept = Domain(
+        cf_account_id=cf_account.id,
+        zone_id="z2",
+        domain_name="legacy.com",
+        status="active",
+        webhook_secret="legacy-secret",
+    )
+    db_session.add(d_kept)
+    await db_session.commit()
+
+    # 旧路径：zone_id=None → 按域名升序匹配，跳过 null
+    secret = await inbound_service._resolve_secret(db_session, "x@legacy.com")
+    assert secret == "legacy-secret"

@@ -168,7 +168,11 @@ def _patch_deploy_ok(
 async def test_deploy_success(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """成功：上传 1 次、secret 1 次、catch-all 每个域名各 1 次。"""
+    """成功：上传 1 次、secret 1 次、catch-all 每个域名各 1 次。
+
+    secret 的 JSON 结构为 ``{domain: {zone_id, secret}}``，
+    Worker 据此向平台回传 zone_id 以避免跨账号同名域名歧义。
+    """
     _user, cf_account, _domains = await _make_user_with_account_and_domains(
         db_session,
         domains=[("z1", "a.com"), ("z2", "b.com")],
@@ -187,6 +191,17 @@ async def test_deploy_success(
     catch = cap["catch_all_calls"]
     assert isinstance(catch, list)
     assert {z for z, _ in catch} == {"z1", "z2"}
+
+    # secret JSON 结构：{domain: {zone_id, secret}}
+    last_secret_json = cap["last_secret_json"]
+    assert isinstance(last_secret_json, str)
+    import json as _json
+
+    parsed = _json.loads(last_secret_json)
+    assert parsed["a.com"]["zone_id"] == "z1"
+    assert parsed["a.com"]["secret"] == "init-secret"
+    assert parsed["b.com"]["zone_id"] == "z2"
+    assert parsed["b.com"]["secret"] == "init-secret"
 
 
 async def test_deploy_generates_missing_webhook_secret(
@@ -439,3 +454,33 @@ def test_validate_public_base_url_bypassed_in_fake_mode(
     monkeypatch.setattr(settings, "APP_BASE_URL", "http://localhost:8000")
     monkeypatch.setattr(settings, "CF_FAKE_MODE", True)
     worker_deploy_service._validate_public_base_url()
+
+
+# ---- 非 global IP 校验（含 CGNAT/reserved/benchmarking）----
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        # CGNAT 100.64.0.0/10（之前漏判）
+        "https://100.64.0.1",
+        # benchmarking 198.18.0.0/15
+        "https://198.18.0.1",
+        # IETF protocol assignments 192.0.0.0/24
+        "https://192.0.0.1",
+        # reserved 240.0.0.0/4
+        "https://240.0.0.1",
+        # multicast 224.0.0.0/4（is_global=True 但需显式拒绝）
+        "https://224.0.0.1",
+        # unspecified 0.0.0.0/8
+        "https://0.0.0.0",
+    ],
+)
+def test_validate_public_base_url_rejects_non_global_ip(
+    monkeypatch: pytest.MonkeyPatch, bad_url: str
+) -> None:
+    """非 global IP（含 CGNAT / reserved / benchmarking / multicast）一律拒绝。"""
+    monkeypatch.setattr(settings, "APP_BASE_URL", bad_url)
+    monkeypatch.setattr(settings, "CF_FAKE_MODE", False)
+    with pytest.raises(AppException):
+        worker_deploy_service._validate_public_base_url()

@@ -4,20 +4,24 @@
  * 一个 CF 账号部署一个 Worker，服务该账号下所有域名。
  * Worker 持有两个环境变量：
  *   - WEBHOOK_URL：平台收件 Webhook 端点（plain_text）
- *   - WEBHOOK_SECRETS：域名→签名密钥 的 JSON 映射（secret，例如
- *                     {"example.com":"abc...","foo.com":"xyz..."}）
+ *   - WEBHOOK_SECRETS：域名→{zone_id, secret} 的 JSON 映射（secret，例如
+ *                     {"example.com":{"zone_id":"abc...","secret":"xyz..."},
+ *                      "foo.com":    {"zone_id":"def...","secret":"uvw..."}}）
  *
  * 流程：
  *   1. email(message, env, ctx) 被 Email Routing 触发
- *   2. 从 message.to 提取域名，查 WEBHOOK_SECRETS 找到该域名的密钥
+ *   2. 从 message.to 提取域名，查 WEBHOOK_SECRETS 找到该域名的 {zone_id, secret}
  *   3. 缓冲 message.raw（单次流，必须先 buffer）
  *   4. 用 postal-mime 解析 MIME，提取 subject / text / html
- *   5. 构造 JSON 载荷 {to, from, subject, text, html}
+ *   5. 构造 JSON 载荷 {to, from, zone_id, subject, text, html}
  *   6. 用该域名密钥计算 HMAC-SHA256，转十六进制
  *   7. fetch POST 到 WEBHOOK_URL，带 X-Webhook-Signature 头
  *
  * 平台侧签名校验：
  *   hmac.new(domain.webhook_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+ *   平台按 (zone_id, domain_name) 唯一定位 Domain.webhook_secret，
+ *   zone_id 由本 Worker 在载荷中提供（与签名 secret 来自同一配置项），
+ *   避免多账号同名域名（如管理员/用户都绑了 example.com）时选错密钥。
  */
 
 import PostalMime from "postal-mime";
@@ -66,8 +70,9 @@ function extractDomain(address) {
 
 /**
  * 解析 WEBHOOK_SECRETS（JSON 字符串）为字典对象，键统一小写。
+ * 每项值形如 {zone_id, secret}，两者都是必填字符串。
  * @param {string | undefined} raw
- * @returns {Record<string, string>}
+ * @returns {Record<string, {zone_id: string, secret: string}>}
  */
 function parseSecrets(raw) {
   if (!raw) return {};
@@ -77,8 +82,16 @@ function parseSecrets(raw) {
       const out = {};
       for (const key of Object.keys(obj)) {
         const value = obj[key];
-        if (typeof value === "string") {
-          out[key.toLowerCase()] = value;
+        if (
+          value &&
+          typeof value === "object" &&
+          typeof value.zone_id === "string" &&
+          typeof value.secret === "string"
+        ) {
+          out[key.toLowerCase()] = {
+            zone_id: value.zone_id,
+            secret: value.secret,
+          };
         }
       }
       return out;
@@ -111,10 +124,10 @@ export default {
       return;
     }
 
-    // 从收件地址提取域名，查找对应的签名密钥
+    // 从收件地址提取域名，查找对应的 {zone_id, secret}
     const domain = extractDomain(message.to);
-    const secret = domain ? webhookSecrets[domain] : undefined;
-    if (!secret) {
+    const entry = domain ? webhookSecrets[domain] : undefined;
+    if (!entry) {
       console.error(`未找到域名 ${domain} 对应的签名密钥`);
       message.setReject("该域名未配置收件");
       return;
@@ -134,9 +147,12 @@ export default {
     }
 
     // 构造平台 Webhook 载荷（字段名与 InboundEmailPayload 一致）
+    // zone_id 来自该域名的配置项，与签名 secret 同源，确保平台侧
+    // 能按 (zone_id, domain_name) 唯一定位 Domain.webhook_secret。
     const payload = {
       to: message.to,
       from: message.from,
+      zone_id: entry.zone_id,
       subject: parsed.subject || "",
       text: parsed.text || "",
       html: parsed.html || "",
@@ -146,7 +162,7 @@ export default {
     const bodyBytes = new TextEncoder().encode(JSON.stringify(payload));
 
     // 计算 HMAC-SHA256 签名
-    const signature = await hmacSha256Hex(secret, bodyBytes);
+    const signature = await hmacSha256Hex(entry.secret, bodyBytes);
 
     // POST 到平台 Webhook
     try {

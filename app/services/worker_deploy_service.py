@@ -2,7 +2,7 @@
 
 一个 CF 账号部署一个 Worker（``cf-email-manager-webhook``），持有：
   - ``WEBHOOK_URL``：平台收件端点（plain_text）
-  - ``WEBHOOK_SECRETS``：域名->签名密钥 的 JSON 映射（secret）
+  - ``WEBHOOK_SECRETS``：域名 -> ``{zone_id, secret}`` 的 JSON 映射（secret）
 
 并为该账号下每个域名配置 Email Routing catch-all -> Worker，
 使域名下任意地址的邮件都投递到该 Worker。
@@ -12,7 +12,7 @@
   2. 加载该账号下所有域名，为缺失 webhook_secret 的域名预生成密钥（仅内存）
   3. 启用每个域名的 Email Routing（若未启用）
   4. 上传 Worker bundle 脚本（含 WEBHOOK_URL binding）
-  5. 设置 WEBHOOK_SECRETS secret（JSON 映射）
+  5. 设置 WEBHOOK_SECRETS secret（{zone_id, secret} 映射）
   6. 对每个域名配置 catch-all -> Worker
   7. 所有 CF 部署成功后，再 commit 新生成的 webhook_secret（防半成品状态）
 
@@ -74,7 +74,9 @@ def _validate_public_base_url() -> None:
     if not is_bad and host is not None:
         try:
             ip = ip_address(host)
-            is_bad = ip.is_private or ip.is_loopback or ip.is_link_local
+            # 拒绝所有非 global IP（含 CGNAT 100.64.0.0/10、reserved 等）
+            # 额外显式拒绝 multicast（ipaddress.is_global 对 224/4 视为 global）
+            is_bad = not ip.is_global or ip.is_multicast or ip.is_unspecified
         except ValueError:
             # 非 IP 字面量（域名），已通过上面的检查
             is_bad = False
@@ -190,8 +192,11 @@ async def deploy_worker_for_account(
             ) from exc
         raise
 
-    # 5. 设置 WEBHOOK_SECRETS secret（域名->密钥 JSON 映射）
-    secrets_map = {d.domain_name.lower(): d.webhook_secret for d in domains}
+    # 5. 设置 WEBHOOK_SECRETS secret（域名 -> {zone_id, secret} JSON 映射）
+    secrets_map = {
+        d.domain_name.lower(): {"zone_id": d.zone_id, "secret": d.webhook_secret}
+        for d in domains
+    }
     secrets_json = json.dumps(secrets_map, ensure_ascii=False, separators=(",", ":"))
     await client.set_worker_secret(
         account_id=cf_account.account_id,
