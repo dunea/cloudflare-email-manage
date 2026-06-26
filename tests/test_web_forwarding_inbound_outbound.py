@@ -222,7 +222,8 @@ async def test_forwarding_form_filters_destinations_by_selected_account(
     assert "renderDests()" in listing.text
     assert "{% for d in dest_options %}" not in listing.text
     assert "destsByAccount" in listing.text
-    assert "good@example.com" in listing.text
+    assert '<option value="good@example.com">' in listing.text
+    assert '<option value="wrong@example.com">' not in listing.text
     assert "wrong@example.com" in listing.text
 
 

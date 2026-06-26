@@ -45,7 +45,7 @@ def test_production_rejects_non_public_hostnames(app_base_url: str) -> None:
         ENVIRONMENT="production",
         SECRET_KEY="s" * 32,
         CF_WEBHOOK_SECRET="w" * 32,
-        ADMIN_PASSWORD="change-me-securely",
+        ADMIN_PASSWORD="change-me-securely",  # noqa: S106
         APP_BASE_URL=app_base_url,
         COOKIE_SECURE=True,
         CSRF_PROTECTION=True,
@@ -63,7 +63,7 @@ def test_valid_production_config_passes() -> None:
         ENVIRONMENT="production",
         SECRET_KEY="s" * 32,
         CF_WEBHOOK_SECRET="w" * 32,
-        ADMIN_PASSWORD="change-me-securely",
+        ADMIN_PASSWORD="change-me-securely",  # noqa: S106
         APP_BASE_URL="https://example.com",
         COOKIE_SECURE=True,
         CSRF_PROTECTION=True,
@@ -91,4 +91,4 @@ async def test_production_web_post_requires_csrf(
     body = resp.json()
     assert body["code"] != 0
     assert body["data"] is None
-    assert body["message"] == "表单已过期，请刷新页面后重试"
+    assert body["message"] == "表单已过期，请刷新页面后重试"  # noqa: RUF001

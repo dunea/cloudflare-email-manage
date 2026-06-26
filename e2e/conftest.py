@@ -25,6 +25,16 @@ os.environ["ADMIN_EMAIL"] = "admin@example.com"
 os.environ["ADMIN_PASSWORD"] = "adminpass123"
 os.environ["COOKIE_SECURE"] = "false"
 
+from app.services.cloudflare import _reset_fake_destination_addresses  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def reset_fake_cloudflare_state() -> Iterator[None]:
+    """每个 e2e 用例前后清理假 CF 内存状态。"""
+    _reset_fake_destination_addresses()
+    yield
+    _reset_fake_destination_addresses()
+
 
 def _free_port() -> int:
     """获取一个可用端口。"""

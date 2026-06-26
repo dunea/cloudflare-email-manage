@@ -22,6 +22,11 @@ _FAKE_DESTINATION_VERIFIED_AT = "2026-06-26T08:00:00Z"
 _fake_destination_addresses: dict[str, dict[str, dict[str, str]]] = {}
 
 
+def _reset_fake_destination_addresses() -> None:
+    """清空假 CF 目标地址缓存 (仅供测试隔离使用)."""
+    _fake_destination_addresses.clear()
+
+
 def _fake_destination_id(email: str) -> str:
     """根据邮箱生成稳定的假 CF 目标地址 ID。"""
     return "fake-dest-" + email.lower().replace("@", "-at-").replace(".", "-")
@@ -373,10 +378,10 @@ class CloudflareClient:
     async def create_destination_address(
         self, account_id: str, email: str
     ) -> dict[str, Any]:
-        """创建一个转发目标地址（需被验证后才可用）。
+        """创建一个转发目标地址 (需被验证后才可用).
 
-        CF 会向该邮箱发送验证邮件，返回结果含 ``id`` / ``email`` / ``verified``。
-        真实 CF 中 ``verified`` 通常为 None；假 CF 模式返回固定时间戳。
+        CF 会向该邮箱发送验证邮件, 返回结果含 ``id`` / ``email`` / ``verified``.
+        真实 CF 中 ``verified`` 通常为 None; 假 CF 模式返回固定时间戳.
         """
         if settings.CF_FAKE_MODE:
             normalized_email = email.lower()
