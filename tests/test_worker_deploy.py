@@ -40,6 +40,7 @@ async def _register_and_login(
 
 
 def _auth(token: str) -> dict[str, str]:
+    """构造 Bearer 认证头。"""
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -148,6 +149,14 @@ def _patch_deploy_ok(
     monkeypatch.setattr(CloudflareClient, "upload_worker_script", _upload)
     monkeypatch.setattr(CloudflareClient, "set_worker_secret", _secret)
     monkeypatch.setattr(CloudflareClient, "update_catch_all_to_worker", _catch_all)
+    # 跳过生产防呆校验：测试环境 APP_BASE_URL 默认为 localhost
+    monkeypatch.setattr(
+        worker_deploy_service, "_validate_public_base_url", lambda: None
+    )
+    # bundle 文件 mock：避免测试依赖真实文件
+    monkeypatch.setattr(
+        worker_deploy_service, "_read_bundle", lambda: b"// fake bundle"
+    )
     return captured
 
 
@@ -168,9 +177,9 @@ async def test_deploy_success(
         db_session, cf_account
     )
 
-    assert result["worker_name"] == "cf-email-manager-webhook"
-    assert result["webhook_url"].endswith("/api/v1/inbound/webhook")
-    assert len(result["domains"]) == 2
+    assert result.worker_name == "cf-email-manager-webhook"
+    assert result.webhook_url.endswith("/api/v1/inbound/webhook")
+    assert len(result.domains) == 2
     assert cap["upload_calls"] == 1
     assert cap["secret_calls"] == 1
     catch = cap["catch_all_calls"]

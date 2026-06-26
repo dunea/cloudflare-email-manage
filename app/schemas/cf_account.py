@@ -40,6 +40,8 @@ class CFAccountRead(BaseModel):
 class DeployedDomain(BaseModel):
     """一键部署返回：已部署的域名信息。"""
 
+    model_config = ConfigDict(from_attributes=True)
+
     domain_id: int
     domain_name: str
     zone_id: str
@@ -47,6 +49,8 @@ class DeployedDomain(BaseModel):
 
 class WorkerDeployResult(BaseModel):
     """一键部署 Worker 结果。"""
+
+    model_config = ConfigDict(from_attributes=True)
 
     worker_name: str
     webhook_url: str

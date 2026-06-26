@@ -24,7 +24,7 @@ TOKEN_PERMISSIONS = [
     ("Account:Email Routing Addresses:Edit", "目标地址管理"),
     ("Account:Email Send:Edit", "发件 Beta 权限"),
     ("Zone:Zone:Read", "读取域名信息"),
-    ("Account:Workers Scripts:Edit", "一键部署收件 Worker（可选）"),
+    ("Account:Workers Scripts:Edit", "一键部署收件 Worker（使用一键部署功能时必需）"),
 ]
 
 
@@ -195,10 +195,9 @@ async def deploy_worker(
     except AppException as exc:
         flash(request, error_message(exc), "error")
         return RedirectResponse(f"/cf-accounts/{account_id}", status_code=303)
-    domain_count = len(result.get("domains", []))
     flash(
         request,
-        f"Worker 「{result['worker_name']}」已部署/更新（{domain_count} 个域名）",
+        f"Worker 「{result.worker_name}」已部署/更新（{len(result.domains)} 个域名）",
         "success",
     )
     return RedirectResponse(f"/cf-accounts/{account_id}", status_code=303)

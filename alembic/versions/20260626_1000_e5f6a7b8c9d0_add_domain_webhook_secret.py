@@ -27,4 +27,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """移除 domain 表的 webhook_secret 列。"""
     op.drop_column('domain', 'webhook_secret')

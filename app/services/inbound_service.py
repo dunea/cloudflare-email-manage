@@ -59,13 +59,19 @@ def _extract_domain_part(to_address: str) -> str:
 
 
 async def _resolve_secret(session: AsyncSession, to_address: str) -> str:
-    """根据收件地址域名查找签名密钥，未匹配则回退到全局密钥。"""
+    """根据收件地址域名查找签名密钥，未匹配则回退到全局密钥。
+
+    域名可能跨账号同名（如管理员域名与用户域名均为 example.com），
+    故使用 ``first()`` 而非 ``scalar_one_or_none()``，避免抛 MultipleResults。
+    """
     domain_part = _extract_domain_part(to_address)
     if domain_part:
-        stmt = select(Domain.webhook_secret).where(
-            func.lower(Domain.domain_name) == domain_part
+        stmt = (
+            select(Domain.webhook_secret)
+            .where(func.lower(Domain.domain_name) == domain_part)
+            .limit(1)
         )
-        result = (await session.execute(stmt)).scalar_one_or_none()
+        result = (await session.execute(stmt)).scalars().first()
         if result:
             return result
     return settings.CF_WEBHOOK_SECRET

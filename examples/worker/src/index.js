@@ -65,7 +65,7 @@ function extractDomain(address) {
 }
 
 /**
- * 解析 WEBHOOK_SECRETS（JSON 字符串）为字典对象。
+ * 解析 WEBHOOK_SECRETS（JSON 字符串）为字典对象，键统一小写。
  * @param {string | undefined} raw
  * @returns {Record<string, string>}
  */
@@ -74,7 +74,14 @@ function parseSecrets(raw) {
   try {
     const obj = JSON.parse(raw);
     if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-      return /** @type {Record<string, string>} */ (obj);
+      const out = {};
+      for (const key of Object.keys(obj)) {
+        const value = obj[key];
+        if (typeof value === "string") {
+          out[key.toLowerCase()] = value;
+        }
+      }
+      return out;
     }
   } catch (err) {
     console.error("WEBHOOK_SECRETS 解析失败:", err);

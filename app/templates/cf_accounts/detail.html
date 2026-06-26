@@ -77,7 +77,8 @@
   </p>
   <ul class="mb-4 list-disc pl-5 text-xs text-slate-600">
     <li>Worker 名称：<code class="font-mono">cf-email-manager-webhook</code>（账号内唯一）</li>
-    <li>每次部署会刷新所有域名签名密钥与 catch-all 路由</li>
+    <li>为缺失密钥的域名自动补生成 <code class="font-mono">webhook_secret</code>，已有密钥沿用</li>
+    <li>每次部署会刷新所有域名的 catch-all 路由</li>
     <li>新增域名后需重新部署一次以更新密钥映射</li>
     <li>CF API Token 需具备 <code class="font-mono">Account:Workers Scripts:Edit</code> 权限</li>
     <li>每个域名独立签名密钥，验证 webhook 时按收件域名自动定位</li>

@@ -11,12 +11,42 @@ Email Routing（转发规则 / 目标地址）、Email Sending（Beta）。
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 import httpx
 
 from app.config import settings
 from app.exceptions import CloudflareError
+
+
+# ---- Worker 部署相关响应 TypedDict ----
+
+
+class EmailRoutingStatus(TypedDict):
+    """Zone Email Routing 启用状态响应。"""
+
+    enabled: bool
+    status: NotRequired[str]
+
+
+class CatchAllRule(TypedDict, total=False):
+    """Zone catch-all 规则响应。
+
+    使用 ``total=False`` 允许所有键缺省，方便按 CF 实际响应灵活构造。
+    """
+
+    id: str
+    enabled: bool
+    actions: list[dict[str, Any]]
+    matchers: list[dict[str, Any]]
+
+
+class WorkerBinding(TypedDict):
+    """Worker 绑定项（上传脚本时作为 metadata 的一部分传入）。"""
+
+    type: str
+    name: str
+    text: NotRequired[str]
 
 # CF API 默认超时（秒）
 _DEFAULT_TIMEOUT = 15.0
@@ -176,52 +206,71 @@ class CloudflareClient:
 
     # ---- Email Routing：启用/状态 ----
 
-    async def get_email_routing_status(self, zone_id: str) -> dict[str, Any]:
+    async def get_email_routing_status(self, zone_id: str) -> EmailRoutingStatus:
         """查询 Zone 的 Email Routing 状态（GET /zones/{zid}/email/routing）。"""
         if settings.CF_FAKE_MODE:
             return {"enabled": True, "status": "ready"}
         result = await self._request("GET", f"/zones/{zone_id}/email/routing")
-        return result if isinstance(result, dict) else {}
+        if not isinstance(result, dict):
+            return {"enabled": False}
+        return EmailRoutingStatus(
+            enabled=bool(result.get("enabled", False)),
+            status=str(result.get("status", "")),
+        )
 
-    async def enable_email_routing(self, zone_id: str) -> dict[str, Any]:
+    async def enable_email_routing(self, zone_id: str) -> EmailRoutingStatus:
         """启用 Zone 的 Email Routing（POST .../email/routing/enable）。"""
         if settings.CF_FAKE_MODE:
             return {"enabled": True, "status": "ready"}
         result = await self._request(
             "POST", f"/zones/{zone_id}/email/routing/enable"
         )
-        return result if isinstance(result, dict) else {}
+        if not isinstance(result, dict):
+            return {"enabled": True}
+        return EmailRoutingStatus(
+            enabled=bool(result.get("enabled", True)),
+            status=str(result.get("status", "")),
+        )
 
     # ---- Email Routing：catch-all 规则 ----
 
-    async def get_catch_all_rule(self, zone_id: str) -> dict[str, Any]:
+    async def get_catch_all_rule(self, zone_id: str) -> CatchAllRule:
         """获取 Zone 的 catch-all 规则（GET .../email/routing/rules/catch_all）。"""
         if settings.CF_FAKE_MODE:
-            return {
-                "id": "catch-all-fake",
-                "enabled": False,
-                "actions": [],
-                "matchers": [{"type": "all"}],
-            }
+            return CatchAllRule(
+                id="catch-all-fake",
+                enabled=False,
+                actions=[],
+                matchers=[{"type": "all"}],
+            )
         result = await self._request(
             "GET", f"/zones/{zone_id}/email/routing/rules/catch_all"
         )
-        return result if isinstance(result, dict) else {}
+        if not isinstance(result, dict):
+            return CatchAllRule(enabled=False, actions=[], matchers=[{"type": "all"}])
+        out: CatchAllRule = CatchAllRule(
+            enabled=bool(result.get("enabled", False)),
+            actions=list(result.get("actions", [])),
+            matchers=list(result.get("matchers", [{"type": "all"}])),
+        )
+        if result.get("id"):
+            out["id"] = str(result["id"])
+        return out
 
     async def update_catch_all_to_worker(
         self, zone_id: str, worker_name: str
-    ) -> dict[str, Any]:
+    ) -> CatchAllRule:
         """将 Zone 的 catch-all 规则设为投递到指定 Worker（PUT .../rules/catch_all）。
 
         action: ``{"type": "worker", "value": [worker_name], "enabled": True}``。
         """
         if settings.CF_FAKE_MODE:
-            return {
-                "id": "catch-all-fake",
-                "enabled": True,
-                "actions": [{"type": "worker", "value": [worker_name]}],
-                "matchers": [{"type": "all"}],
-            }
+            return CatchAllRule(
+                id="catch-all-fake",
+                enabled=True,
+                actions=[{"type": "worker", "value": [worker_name]}],
+                matchers=[{"type": "all"}],
+            )
         payload = {
             "enabled": True,
             "actions": [{"type": "worker", "value": [worker_name]}],
@@ -230,7 +279,20 @@ class CloudflareClient:
         result = await self._request(
             "PUT", f"/zones/{zone_id}/email/routing/rules/catch_all", json=payload
         )
-        return result if isinstance(result, dict) else {}
+        if not isinstance(result, dict):
+            return CatchAllRule(
+                enabled=True,
+                actions=[{"type": "worker", "value": [worker_name]}],
+                matchers=[{"type": "all"}],
+            )
+        out: CatchAllRule = CatchAllRule(
+            enabled=bool(result.get("enabled", True)),
+            actions=list(result.get("actions", [{"type": "worker", "value": [worker_name]}])),
+            matchers=list(result.get("matchers", [{"type": "all"}])),
+        )
+        if result.get("id"):
+            out["id"] = str(result["id"])
+        return out
 
     # ---- Email Routing：目标地址 ----
 
@@ -325,7 +387,7 @@ class CloudflareClient:
         *,
         compatibility_date: str = "2025-01-01",
         compatibility_flags: list[str] | None = None,
-        bindings: list[dict[str, Any]] | None = None,
+        bindings: list[WorkerBinding] | None = None,
     ) -> dict[str, Any]:
         """上传并部署 Worker 脚本（PUT /accounts/{aid}/workers/scripts/{name}）。
 

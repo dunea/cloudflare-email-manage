@@ -74,7 +74,7 @@ npx esbuild src/index.js --bundle --format=esm --platform=browser \
 
 ## 架构
 
-```
+```text
 外部发件人
   → Cloudflare Email Routing（catch-all → Worker）
   → 触发本 Worker 的 email() handler
@@ -109,7 +109,7 @@ npx wrangler tail    # 实时日志
 | 现象 | 可能原因 | 排查方法 |
 |------|---------|---------|
 | 平台显示「暂无邮件」 | Worker 未部署或路由规则未配置 | 确认步骤 4-5 已完成 |
-| 平台显示「暂无邮件」 | 签名不匹配（401） | 确认 `CF_WEBHOOK_SECRET` 两端一致 |
+| 平台显示「暂无邮件」 | 签名不匹配（401） | 确认 Worker `WEBHOOK_SECRETS` 中该域名密钥与平台 `Domain.webhook_secret` 一致 |
 | 平台显示「暂无邮件」 | `WEBHOOK_URL` 错误或平台不可达 | 从 Worker 所在网络 curl 测试 |
 | Worker 日志报错 | 邮件解析失败 | 查 `wrangler tail` 实时日志 |
 | 发件人收到退信 | Email Routing 未启用或域名 DNS 有误 | 检查 MX 讀记录 |
@@ -128,8 +128,8 @@ npx wrangler tail
 不通过 Worker，直接用 curl 模拟 Webhook 请求（验证平台端是否正常）：
 
 ```bash
-# 计算签名（需要与平台 .env 中的 CF_WEBHOOK_SECRET 一致）
-SECRET="<your-cf-webhook-secret>"
+# 计算签名（密钥需与平台 domain 表中 example.com 的 webhook_secret 一致）
+SECRET="<domain-webhook-secret>"
 BODY='{"to":"hello@example.com","from":"test@gmail.com","subject":"测试","text":"正文","html":"<p>正文</p>"}'
 SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/.* //')
 
@@ -141,7 +141,7 @@ curl -X POST http://localhost:8000/api/v1/inbound/webhook \
 
 > Windows PowerShell 可用：
 > ```powershell
-> $secret = "<your-cf-webhook-secret>"
+> $secret = "<domain-webhook-secret>"
 > $body = '{"to":"hello@example.com","from":"test@gmail.com","subject":"测试","text":"正文"}'
 > $hmac = New-Object System.Security.Cryptography.HMACSHA256
 > $hmac.Key = [Text.Encoding]::UTF8.GetBytes($secret)

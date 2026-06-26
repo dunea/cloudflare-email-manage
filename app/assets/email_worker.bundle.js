@@ -3857,10 +3857,14 @@ function parseSecrets(raw) {
   try {
     const obj = JSON.parse(raw);
     if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-      return (
-        /** @type {Record<string, string>} */
-        obj
-      );
+      const out = {};
+      for (const key of Object.keys(obj)) {
+        const value = obj[key];
+        if (typeof value === "string") {
+          out[key.toLowerCase()] = value;
+        }
+      }
+      return out;
     }
   } catch (err) {
     console.error("WEBHOOK_SECRETS \u89E3\u6790\u5931\u8D25:", err);

@@ -2,17 +2,22 @@
 
 一个 CF 账号部署一个 Worker（``cf-email-manager-webhook``），持有：
   - ``WEBHOOK_URL``：平台收件端点（plain_text）
-  - ``WEBHOOK_SECRETS``：域名→签名密钥 的 JSON 映射（secret）
+  - ``WEBHOOK_SECRETS``：域名->签名密钥 的 JSON 映射（secret）
 
-并为该账号下每个域名配置 Email Routing catch-all → Worker，
+并为该账号下每个域名配置 Email Routing catch-all -> Worker，
 使域名下任意地址的邮件都投递到该 Worker。
 
 部署流程：
-  1. 确保账号下每个域名都有 webhook_secret（缺失则生成并提交）
-  2. 启用每个域名的 Email Routing（若未启用）
-  3. 上传 Worker bundle 脚本（含 WEBHOOK_URL binding）
-  4. 设置 WEBHOOK_SECRETS secret（JSON 映射）
-  5. 对每个域名配置 catch-all → Worker
+  1. 校验 APP_BASE_URL 非 localhost（生产防呆）
+  2. 加载该账号下所有域名，为缺失 webhook_secret 的域名预生成密钥（仅内存）
+  3. 启用每个域名的 Email Routing（若未启用）
+  4. 上传 Worker bundle 脚本（含 WEBHOOK_URL binding）
+  5. 设置 WEBHOOK_SECRETS secret（JSON 映射）
+  6. 对每个域名配置 catch-all -> Worker
+  7. 所有 CF 部署成功后，再 commit 新生成的 webhook_secret（防半成品状态）
+
+任何 CF 步骤失败抛出 CloudflareError（已映射 502），新生成的 webhook_secret
+不会被持久化，平台仍可用旧密钥或全局 CF_WEBHOOK_SECRET 验签。
 """
 
 from __future__ import annotations
@@ -21,7 +26,6 @@ import json
 import logging
 import secrets
 from pathlib import Path
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,7 +33,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.exceptions import AppException, CloudflareError
 from app.models import CFAccount, Domain
+from app.schemas.cf_account import DeployedDomain, WorkerDeployResult
 from app.services.cf_account_service import build_client
+from app.services.cloudflare import WorkerBinding
 
 logger = logging.getLogger(__name__)
 
@@ -52,23 +58,42 @@ def _platform_webhook_url() -> str:
     return f"{base}/api/v1/inbound/webhook"
 
 
-async def _ensure_domain_secrets(session: AsyncSession, domains: list[Domain]) -> None:
-    """为缺失 webhook_secret 的域名生成密钥并提交。"""
-    need_commit = False
+def _validate_public_base_url() -> None:
+    """部署时校验 APP_BASE_URL 非 localhost/私有地址，避免静默破坏 Worker 回传。
+
+    本地开发（CF_FAKE_MODE=True 或 APP_BASE_URL 含 localhost）放行。
+    """
+    if settings.CF_FAKE_MODE:
+        return
+    base = settings.APP_BASE_URL.lower().strip()
+    if "localhost" in base or "127.0.0.1" in base or base.startswith("http://"):
+        raise AppException(
+            "APP_BASE_URL 仍为本地地址（当前: "
+            f"{settings.APP_BASE_URL!r}），无法作为 Worker 回传地址。"
+            "请在 .env 中配置公网可达的 HTTPS URL（如 https://your-domain.com）后重试。",
+            code=1400,
+        )
+
+
+def _prepare_domain_secrets(domains: list[Domain]) -> list[str]:
+    """为缺失 webhook_secret 的域名在内存中预生成密钥，返回有变更的 domain.id 列表。
+
+    不在此处 commit，调用方需在所有 CF 部署成功后统一 commit。
+    """
+    changed_ids: list[str] = []
     for domain in domains:
         if not domain.webhook_secret:
             domain.webhook_secret = secrets.token_urlsafe(32)
-            need_commit = True
-    if need_commit:
-        await session.commit()
+            changed_ids.append(str(domain.id))
+    return changed_ids
 
 
 def _read_bundle() -> bytes:
     """读取 bundle 产物；缺失时给出明确指引。"""
     if not BUNDLE_PATH.exists():
         raise AppException(
-            "Worker bundle 产物不存在：app/assets/email_worker.bundle.js。"
-            "请先在 examples/worker 目录运行："
+            "Worker bundle 产物不存在: app/assets/email_worker.bundle.js。"
+            "请先在 examples/worker 目录运行: "
             "npx esbuild src/index.js --bundle --format=esm "
             "--platform=browser --outfile=../../app/assets/email_worker.bundle.js",
             code=1500,
@@ -79,13 +104,17 @@ def _read_bundle() -> bytes:
 
 async def deploy_worker_for_account(
     session: AsyncSession, cf_account: CFAccount
-) -> dict[str, Any]:
-    """为指定 CF 账号一键部署收件 Worker。
+) -> WorkerDeployResult:
+    """为指定 CF 账号一键部署收件 Worker，返回部署结果。
 
-    调用顺序：启用 Email Routing → 上传脚本 → 设置 secret → 配置每个域名的 catch-all。
-    任何步骤失败抛出 CloudflareError（已映射 502）。
+    调用顺序: 校验 APP_BASE_URL -> 预生成缺失密钥（仅内存）-> 启用 Email Routing
+    -> 上传脚本 -> 设置 secret -> 配置每个域名的 catch-all -> commit 新密钥。
+    任何 CF 步骤失败抛出 CloudflareError（已映射 502），新生成的 webhook_secret
+    不会被 commit。
     """
-    # 1. 加载该账号下所有域名，并确保都有 webhook_secret
+    _validate_public_base_url()
+
+    # 1. 加载该账号下所有域名
     domains = list(
         (
             await session.execute(
@@ -99,38 +128,34 @@ async def deploy_worker_for_account(
             code=1400,
         )
 
-    await _ensure_domain_secrets(session, domains)
+    # 2. 内存中预生成缺失的 webhook_secret（延后 commit）
+    _prepare_domain_secrets(domains)
 
     client = build_client(cf_account)
     webhook_url = _platform_webhook_url()
     bundle_bytes = _read_bundle()
 
-    # 2. 启用每个域名的 Email Routing（幂等：已启用则无害）
-    deployed_domains: list[dict[str, Any]] = []
+    # 3. 启用每个域名的 Email Routing（幂等: 已启用则无害）
+    deployed: list[DeployedDomain] = []
     for domain in domains:
         try:
             status = await client.get_email_routing_status(domain.zone_id)
             if not status.get("enabled", False):
                 await client.enable_email_routing(domain.zone_id)
         except CloudflareError:
-            # 重新抛出，附加域名信息便于排错
             logger.exception("启用 Email Routing 失败: %s", domain.domain_name)
             raise
-        deployed_domains.append(
-            {
-                "domain_id": domain.id,
-                "domain_name": domain.domain_name,
-                "zone_id": domain.zone_id,
-            }
+        deployed.append(
+            DeployedDomain(
+                domain_id=domain.id,
+                domain_name=domain.domain_name,
+                zone_id=domain.zone_id,
+            )
         )
 
-    # 3. 上传 Worker 脚本（含 WEBHOOK_URL plain_text binding）
-    bindings = [
-        {
-            "type": "plain_text",
-            "name": "WEBHOOK_URL",
-            "text": webhook_url,
-        }
+    # 4. 上传 Worker 脚本（含 WEBHOOK_URL plain_text binding）
+    bindings: list[WorkerBinding] = [
+        WorkerBinding(type="plain_text", name="WEBHOOK_URL", text=webhook_url),
     ]
     try:
         await client.upload_worker_script(
@@ -146,14 +171,14 @@ async def deploy_worker_for_account(
         # 权限不足时给出可读提示
         if "10000" in str(exc) or "403" in str(exc) or "permission" in str(exc).lower():
             raise AppException(
-                "部署 Worker 失败：CF API Token 缺少 Account:Workers Scripts:Edit 权限。"
+                "部署 Worker 失败: CF API Token 缺少 Account:Workers Scripts:Edit 权限。"
                 "请在 Cloudflare Dashboard 创建具备该权限的 Token 后重新绑定。",
                 code=1403,
                 http_status=403,
             ) from exc
         raise
 
-    # 4. 设置 WEBHOOK_SECRETS secret（域名→密钥 JSON 映射）
+    # 5. 设置 WEBHOOK_SECRETS secret（域名->密钥 JSON 映射）
     secrets_map = {d.domain_name.lower(): d.webhook_secret for d in domains}
     secrets_json = json.dumps(secrets_map, ensure_ascii=False, separators=(",", ":"))
     await client.set_worker_secret(
@@ -163,12 +188,15 @@ async def deploy_worker_for_account(
         secret_value=secrets_json,
     )
 
-    # 5. 对每个域名配置 catch-all → Worker
+    # 6. 对每个域名配置 catch-all -> Worker
     for domain in domains:
         await client.update_catch_all_to_worker(domain.zone_id, WORKER_NAME)
 
-    return {
-        "worker_name": WORKER_NAME,
-        "webhook_url": webhook_url,
-        "domains": deployed_domains,
-    }
+    # 7. 所有 CF 步骤成功后，commit 新生成的 webhook_secret
+    await session.commit()
+
+    return WorkerDeployResult(
+        worker_name=WORKER_NAME,
+        webhook_url=webhook_url,
+        domains=deployed,
+    )

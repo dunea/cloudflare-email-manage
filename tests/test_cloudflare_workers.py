@@ -10,7 +10,9 @@ import json
 import httpx
 import pytest
 
-from app.services.cloudflare import CloudflareClient
+from app.exceptions import CloudflareError
+
+from app.services.cloudflare import CloudflareClient, WorkerBinding
 
 
 # ---- Workers Scripts：上传 ----
@@ -34,7 +36,9 @@ async def test_upload_worker_script_multipart() -> None:
 
     cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
     bundle = b"// bundle js content"
-    bindings = [{"type": "plain_text", "name": "WEBHOOK_URL", "text": "http://x/w"}]
+    bindings: list[WorkerBinding] = [
+        WorkerBinding(type="plain_text", name="WEBHOOK_URL", text="http://x/w"),
+    ]
     result = await cf.upload_worker_script(
         account_id="acc1",
         script_name="sw",
@@ -72,7 +76,7 @@ async def test_upload_worker_script_400_raises() -> None:
         )
 
     cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
-    with pytest.raises(Exception):
+    with pytest.raises(CloudflareError):
         await cf.upload_worker_script(
             "acc", "sw", "index.js", b"x", compatibility_date="2025-01-01"
         )
@@ -145,6 +149,8 @@ async def test_enable_email_routing() -> None:
 
 
 async def test_get_catch_all_rule() -> None:
+    """get_catch_all_rule 返回规则对象，含 enabled/actions/matchers。"""
+
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/zones/z1/email/routing/rules/catch_all")
         assert request.method == "GET"
@@ -163,7 +169,7 @@ async def test_get_catch_all_rule() -> None:
 
     cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
     rule = await cf.get_catch_all_rule("z1")
-    assert rule["enabled"] is False
+    assert rule.get("enabled") is False
 
 
 async def test_update_catch_all_to_worker() -> None:
@@ -198,4 +204,4 @@ async def test_update_catch_all_to_worker() -> None:
     assert body["enabled"] is True
     assert body["actions"] == [{"type": "worker", "value": ["sw"]}]
     assert body["matchers"] == [{"type": "all"}]
-    assert result["enabled"] is True
+    assert result.get("enabled") is True

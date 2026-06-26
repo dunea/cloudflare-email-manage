@@ -144,6 +144,5 @@ async def deploy_worker(
     cf_account = await cf_account_service.get_cf_account_or_404(
         session, account_id, current_user
     )
-    raw = await worker_deploy_service.deploy_worker_for_account(session, cf_account)
-    result = WorkerDeployResult.model_validate(raw)
+    result = await worker_deploy_service.deploy_worker_for_account(session, cf_account)
     return ApiResponse(data=result)
