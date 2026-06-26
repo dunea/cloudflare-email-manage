@@ -77,34 +77,59 @@ async def _resolve_secret(
     Worker 在 webhook 载荷中附带 zone_id（与签名 secret 同源），
     平台按 ``(zone_id, domain_name)`` 唯一定位 Domain.webhook_secret，
     避免多账号同名域名（如管理员与用户都绑了 example.com）时选错密钥。
-    旧部署 Worker 不传 zone_id 时，按域名降级匹配首条非空 secret
-    （保持向后兼容；新部署须经 worker_deploy_service 写入 zone_id）。
+
+    - 新部署 Worker 必传 zone_id：``(zone_id, domain_name)`` 命中 → 用该域 secret；
+      该域名在 DB 中有非空 secret，但 Worker 用的 zone_id 与之不匹配 → fail-close
+      （返回空串，调用方 401），配置错误时不应静默用全局密钥兜底。
+    - 该域名存在但 secret=NULL / zone_id 不匹配但该域名无任何非空 secret
+      → 回退到全局 CF_WEBHOOK_SECRET。
+    - 旧部署 Worker 不传 zone_id 时按域名降级匹配首条非空 secret
+      （保持向后兼容；新部署须经 worker_deploy_service 写入 zone_id）。
+    - 域名完全不在 DB（陌生发件人）→ 回退到全局 CF_WEBHOOK_SECRET。
     """
     domain_part = _extract_domain_part(to_address)
-    if domain_part:
-        if zone_id:
-            stmt = select(Domain.webhook_secret).where(
-                Domain.zone_id == zone_id,
-                func.lower(Domain.domain_name) == domain_part,
-                Domain.webhook_secret.is_not(None),
-            )
-            result = (await session.execute(stmt)).scalars().first()
-            if result:
-                return result
-        else:
-            # 旧 Worker 兼容：按域名降级匹配首条非空 secret
-            stmt = (
+    if not domain_part:
+        return settings.CF_WEBHOOK_SECRET
+
+    if zone_id:
+        # (zone_id, domain_name) 精确命中 → 直接返回该域 secret
+        stmt = select(Domain.webhook_secret).where(
+            Domain.zone_id == zone_id,
+            func.lower(Domain.domain_name) == domain_part,
+            Domain.webhook_secret.is_not(None),
+        )
+        result = (await session.execute(stmt)).scalars().first()
+        if result:
+            return result
+        # 未命中：检查该域名是否在 DB 中有非空 secret（即 zone_id 不匹配）
+        other_secret = (
+            await session.execute(
                 select(Domain.webhook_secret)
                 .where(
                     func.lower(Domain.domain_name) == domain_part,
                     Domain.webhook_secret.is_not(None),
                 )
-                .order_by(Domain.id)
                 .limit(1)
             )
-            result = (await session.execute(stmt)).scalars().first()
-            if result:
-                return result
+        ).scalars().first()
+        if other_secret is not None:
+            # 域名存在但 zone_id 不匹配 → 配置错误，fail-close
+            return ""
+        return settings.CF_WEBHOOK_SECRET
+
+    # 旧 Worker 兼容：按域名降级匹配首条非空 secret
+    stmt = (
+        select(Domain.webhook_secret)
+        .where(
+            func.lower(Domain.domain_name) == domain_part,
+            Domain.webhook_secret.is_not(None),
+        )
+        .order_by(Domain.id)
+        .limit(1)
+    )
+    result = (await session.execute(stmt)).scalars().first()
+    if result:
+        return result
     return settings.CF_WEBHOOK_SECRET
 
 

@@ -67,6 +67,26 @@ class WorkerBinding(TypedDict):
     name: str
     text: NotRequired[str]
 
+
+class WorkerUploadResult(TypedDict, total=False):
+    """Worker 脚本上传成功后的 CF 响应 result。
+
+    CF 在不同场景下会返回 ``id``、``script_name`` 或其他元信息，
+    使用 ``total=False`` 允许按响应灵活取值。
+    """
+
+    id: str
+    script_name: str
+    etag: NotRequired[str]
+    modified_on: NotRequired[str]
+    created_on: NotRequired[str]
+
+
+class WorkerSecretResult(TypedDict, total=False):
+    """Worker secret 写入成功后的 CF 响应 result。"""
+
+    name: str
+
 # CF API 默认超时（秒）
 _DEFAULT_TIMEOUT = 15.0
 
@@ -407,16 +427,16 @@ class CloudflareClient:
         compatibility_date: str = "2025-01-01",
         compatibility_flags: list[str] | None = None,
         bindings: list[WorkerBinding] | None = None,
-    ) -> dict[str, Any]:
+    ) -> WorkerUploadResult:
         """上传并部署 Worker 脚本（PUT /accounts/{aid}/workers/scripts/{name}）。
 
         使用 multipart/form-data：metadata part（JSON）+ 主模块文件 part。
         主模块必须作为文件（带 filename）上传，否则 CF 返回 10021。
         """
         if settings.CF_FAKE_MODE:
-            return {"id": "worker-fake", "script_name": script_name}
+            return WorkerUploadResult(id="worker-fake", script_name=script_name)
 
-        metadata: dict[str, Any] = {
+        metadata: dict[str, object] = {
             "main_module": main_module_name,
             "compatibility_date": compatibility_date,
         }
@@ -466,10 +486,22 @@ class CloudflareClient:
             raise CloudflareError(
                 f"Cloudflare Worker 部署失败: {body.get('errors') or body}"
             )
-        # 标准 CF 信封返回 result 字段；非标准则原样返回
+        # 标准 CF 信封返回 result 字段；非标准则原样转换为 WorkerUploadResult
         if isinstance(body, dict) and "result" in body:
-            return body["result"] if isinstance(body["result"], dict) else {}
-        return body if isinstance(body, dict) else {}
+            raw = body["result"] if isinstance(body["result"], dict) else {}
+        elif isinstance(body, dict):
+            raw = body
+        else:
+            raw = {}
+        out: WorkerUploadResult = WorkerUploadResult(
+            id=str(raw.get("id", "")),
+            script_name=str(raw.get("script_name", script_name)),
+        )
+        for key in ("etag", "modified_on", "created_on"):
+            value = raw.get(key)
+            if value is not None:
+                out[key] = str(value)  # type: ignore[literal-required]  # noqa: PERF102
+        return out
 
     async def set_worker_secret(
         self,
@@ -477,14 +509,14 @@ class CloudflareClient:
         script_name: str,
         secret_name: str,
         secret_value: str,
-    ) -> dict[str, Any]:
+    ) -> WorkerSecretResult:
         """为 Worker 设置/更新 secret（PUT .../workers/scripts/{name}/secrets）。
 
         body: ``{"name": secret_name, "text": secret_value, "type": "secret"}``。
         secret 在 CF 端加密存储，dashboard 不可见。
         """
         if settings.CF_FAKE_MODE:
-            return {"name": secret_name}
+            return WorkerSecretResult(name=secret_name)
         payload = {
             "name": secret_name,
             "text": secret_value,
@@ -495,4 +527,8 @@ class CloudflareClient:
             f"/accounts/{account_id}/workers/scripts/{script_name}/secrets",
             json=payload,
         )
-        return result if isinstance(result, dict) else {}
+        if not isinstance(result, dict):
+            return WorkerSecretResult(name=secret_name)
+        return WorkerSecretResult(
+            name=str(result.get("name", secret_name)),
+        )

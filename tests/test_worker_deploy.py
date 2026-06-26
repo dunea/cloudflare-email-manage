@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import json as _json
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +32,7 @@ async def _register_and_login(
     email: str = "alice@example.com",
     password: str = "password123",
 ) -> str:
+    """注册并登录，返回访问令牌。"""
     await client.post(
         "/api/v1/auth/register",
         json={"username": username, "email": email, "password": password},
@@ -195,8 +198,6 @@ async def test_deploy_success(
     # secret JSON 结构：{domain: {zone_id, secret}}
     last_secret_json = cap["last_secret_json"]
     assert isinstance(last_secret_json, str)
-    import json as _json
-
     parsed = _json.loads(last_secret_json)
     assert parsed["a.com"]["zone_id"] == "z1"
     assert parsed["a.com"]["secret"] == "init-secret"
@@ -414,6 +415,7 @@ async def test_web_deploy_worker_form_success(
         "http://localhost:8000",
         "https://localhost",
         "https://127.0.0.1",
+        "https://[::1]",
         "https://10.0.0.1",
         "https://192.168.1.10",
         "https://172.16.0.1",
@@ -474,12 +476,14 @@ def test_validate_public_base_url_bypassed_in_fake_mode(
         "https://224.0.0.1",
         # unspecified 0.0.0.0/8
         "https://0.0.0.0",
+        # IPv6 link-local
+        "https://[fe80::1]",
     ],
 )
 def test_validate_public_base_url_rejects_non_global_ip(
     monkeypatch: pytest.MonkeyPatch, bad_url: str
 ) -> None:
-    """非 global IP（含 CGNAT / reserved / benchmarking / multicast）一律拒绝。"""
+    """非 global IP（含 CGNAT / reserved / benchmarking / multicast / IPv6 link-local）一律拒绝。"""
     monkeypatch.setattr(settings, "APP_BASE_URL", bad_url)
     monkeypatch.setattr(settings, "CF_FAKE_MODE", False)
     with pytest.raises(AppException):

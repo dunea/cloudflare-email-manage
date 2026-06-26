@@ -3,7 +3,7 @@
 本目录是 CF Email Manager 平台收件 Worker 的**源码参考**与 bundle 构建源。
 
 - **源码**：`src/index.js`（账号级 Worker，根据收件地址域名在
-  `WEBHOOK_SECRETS` JSON 映射中查找对应的签名密钥）
+  `WEBHOOK_SECRETS` JSON 映射中查找对应的 `{zone_id, secret}`）
 - **bundle 产物**：`app/assets/email_worker.bundle.js`（后端一键部署时上传到 CF）
 
 ## 推荐：在平台前端一键部署
@@ -13,7 +13,7 @@
 
 1. 启用各域名 Email Routing
 2. 上传 Worker 脚本（含 `WEBHOOK_URL` binding）
-3. 注入 `WEBHOOK_SECRETS`（域名→签名密钥 JSON）
+3. 注入 `WEBHOOK_SECRETS`（域名→`{zone_id, secret}` JSON 映射）
 4. 为每个域名配置 catch-all → Worker
 
 无需本机 Node 环境，无需 wrangler，无需手动配路由。
@@ -42,11 +42,13 @@ WEBHOOK_URL = "https://your-platform-domain.com/api/v1/inbound/webhook"
 
 Worker 需要两个环境变量/secret：
 - `WEBHOOK_URL`（plain_text，平台收件地址）— 在 `wrangler.toml` 的 `[vars]` 中配置
-- `WEBHOOK_SECRETS`（secret，JSON 映射 `{"example.com":"<密钥1>","foo.com":"<密钥2>"}`）
+- `WEBHOOK_SECRETS`（secret，JSON 映射
+  `{"example.com":{"zone_id":"<zone_id>","secret":"<密钥1>"},"foo.com":{"zone_id":"<zone_id>","secret":"<密钥2>"}}`）
   — 通过 `npx wrangler secret put WEBHOOK_SECRETS` 设置
 
-> ⚠️ `WEBHOOK_SECRETS` JSON 中的每个域名密钥必须与平台 `Domain.webhook_secret`
-> **完全一致**；缺失域名时该收件地址会被 Worker 拒绝投递。
+> ⚠️ `WEBHOOK_SECRETS` JSON 中每个域名的 `secret` 字段必须与平台
+> `Domain.webhook_secret` **完全一致**，`zone_id` 字段必须与平台
+> `Domain.zone_id` 一致；缺失或不一致的域名在收件时会被 Worker 拒绝投递。
 
 ### 4. 部署 Worker
 
@@ -94,8 +96,8 @@ npx esbuild src/index.js --bundle --format=esm --platform=browser \
 | 现象 | 可能原因 | 排查 |
 |------|---------|------|
 | Worker 报错「未找到域名 X 对应的签名密钥」 | `WEBHOOK_SECRETS` 中缺少该域名 | 同步域名后在平台重新一键部署 |
-| 平台返回 401 | 签名不匹配 | 确认 Worker 的 `WEBHOOK_SECRETS` 中该域名密钥与平台 `Domain.webhook_secret` 一致 |
-| 平台返回 401 | `WEBHOOK_URL` 不可达 | 从 Worker 所在网络 curl 测试 |
+| 平台返回 401 | 签名不匹配 | 确认 Worker 的 `WEBHOOK_SECRETS` 中该域名 `secret` 字段与平台 `Domain.webhook_secret` 一致 |
+| Worker 日志出现 `Webhook 请求失败` | `WEBHOOK_URL` 不可达或网络异常 | 从 Worker 所在网络 `curl` 测试平台收件端点；检查 `wrangler tail` 错误堆栈 |
 | 平台返回 422 | 载荷结构异常 | 用 `wrangler tail` 查看请求体 |
 
 ```bash

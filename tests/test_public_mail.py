@@ -80,8 +80,11 @@ async def _setup(
 ) -> str:
     """绑定并同步域名、创建邮箱地址，返回 public_token。
 
-    同步会为域名生成 per-domain webhook_secret；若传入 ``db_session``，
-    额外将其置空，使 webhook 走全局密钥 fallback（兼容旧 Worker 部署）。
+    同步阶段不再生成 per-domain webhook_secret（由 worker_deploy_service
+    统一管理），新建 Domain.webhook_secret 默认 NULL。
+
+    若传入 ``db_session``，会先显式 seed 一个非空 secret 再清空，
+    以覆盖 legacy Worker 依赖全局密钥 fallback 的兼容路径。
     """
     from sqlalchemy import select
 
@@ -108,6 +111,10 @@ async def _setup(
                 select(Domain).join(CFAccount).where(CFAccount.id == account_id)
             )
         ).scalars().all()
+        assert rows, "test 期望同步至少产生一个域名"
+        for d in rows:
+            d.webhook_secret = "seeded-secret"
+        await db_session.flush()
         for d in rows:
             d.webhook_secret = None
         await db_session.commit()

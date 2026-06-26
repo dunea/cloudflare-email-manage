@@ -458,16 +458,17 @@ async def test_webhook_domain_secret_case_insensitive(
 # ---- _resolve_secret 针对性测试 ----
 
 
-async def test_resolve_secret_uses_zone_id(
+async def _make_resolve_account(
     db_session: AsyncSession,
-) -> None:
-    """_resolve_secret 按 (zone_id, domain_name) 唯一定位，避免跨账号同名域名歧义。"""
-    from app.services import inbound_service
+    *,
+    username: str = "resuser",
+) -> tuple[User, CFAccount]:
+    """为 _resolve_secret 测试快速构造 User + CFAccount 并 flush。"""
     from app.services.crypto import encrypt_token
 
     user = User(
-        username="resuser1",
-        email="r1@test.local",
+        username=username,
+        email=f"{username}@test.local",
         hashed_password="x",
     )
     db_session.add(user)
@@ -480,6 +481,18 @@ async def test_resolve_secret_uses_zone_id(
     )
     db_session.add(cf_account)
     await db_session.flush()
+    return user, cf_account
+
+
+async def test_resolve_secret_uses_zone_id(
+    db_session: AsyncSession,
+) -> None:
+    """_resolve_secret 按 (zone_id, domain_name) 唯一定位，避免跨账号同名域名歧义。"""
+    from app.services import inbound_service
+
+    _user, cf_account = await _make_resolve_account(
+        db_session, username="resuser1"
+    )
     d_first = Domain(
         cf_account_id=cf_account.id,
         zone_id="z1",
@@ -515,23 +528,10 @@ async def test_resolve_secret_falls_back_when_null(
 ) -> None:
     """zone_id 命中域名但 webhook_secret=null 时 fallback 全局密钥。"""
     from app.services import inbound_service
-    from app.services.crypto import encrypt_token
 
-    user = User(
-        username="resuser2",
-        email="r2@test.local",
-        hashed_password="x",
+    _user, cf_account = await _make_resolve_account(
+        db_session, username="resuser2"
     )
-    db_session.add(user)
-    await db_session.flush()
-    cf_account = CFAccount(
-        user_id=user.id,
-        name="t",
-        encrypted_api_token=encrypt_token("tok"),
-        account_id="acc-1",
-    )
-    db_session.add(cf_account)
-    await db_session.flush()
     d = Domain(
         cf_account_id=cf_account.id,
         zone_id="z1",
@@ -546,28 +546,15 @@ async def test_resolve_secret_falls_back_when_null(
     assert secret == settings.CF_WEBHOOK_SECRET
 
 
-async def test_resolve_secret_falls_back_when_unknown_zone(
+async def test_resolve_secret_fails_close_on_zone_mismatch(
     db_session: AsyncSession,
 ) -> None:
-    """payload 中 zone_id 在 DB 中无匹配域名时 fallback 全局密钥。"""
+    """域名在 DB 中存在但 zone_id 不匹配 → fail-close（返回空串），不 fallback 全局密钥。"""
     from app.services import inbound_service
-    from app.services.crypto import encrypt_token
 
-    user = User(
-        username="resuser3",
-        email="r3@test.local",
-        hashed_password="x",
+    _user, cf_account = await _make_resolve_account(
+        db_session, username="resuser3"
     )
-    db_session.add(user)
-    await db_session.flush()
-    cf_account = CFAccount(
-        user_id=user.id,
-        name="t",
-        encrypted_api_token=encrypt_token("tok"),
-        account_id="acc-1",
-    )
-    db_session.add(cf_account)
-    await db_session.flush()
     d = Domain(
         cf_account_id=cf_account.id,
         zone_id="z-real",
@@ -578,11 +565,11 @@ async def test_resolve_secret_falls_back_when_unknown_zone(
     db_session.add(d)
     await db_session.commit()
 
-    # zone_id 不匹配 → fallback 全局密钥，避免拿错 secret
+    # zone_id 不匹配且域名已在 DB → fail-close，避免拿错/默认 secret
     secret = await inbound_service._resolve_secret(
         db_session, "x@real.com", "z-ghost"
     )
-    assert secret == settings.CF_WEBHOOK_SECRET
+    assert secret == ""
 
 
 async def test_resolve_secret_legacy_no_zone_id(
@@ -590,23 +577,10 @@ async def test_resolve_secret_legacy_no_zone_id(
 ) -> None:
     """旧 Worker 不传 zone_id 时，按域名降级匹配首条非空 secret（向后兼容）。"""
     from app.services import inbound_service
-    from app.services.crypto import encrypt_token
 
-    user = User(
-        username="resuser4",
-        email="r4@test.local",
-        hashed_password="x",
+    _user, cf_account = await _make_resolve_account(
+        db_session, username="resuser4"
     )
-    db_session.add(user)
-    await db_session.flush()
-    cf_account = CFAccount(
-        user_id=user.id,
-        name="t",
-        encrypted_api_token=encrypt_token("tok"),
-        account_id="acc-1",
-    )
-    db_session.add(cf_account)
-    await db_session.flush()
     d_null = Domain(
         cf_account_id=cf_account.id,
         zone_id="z1",

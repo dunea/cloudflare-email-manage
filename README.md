@@ -121,7 +121,7 @@ Webhook 端点 `POST /api/v1/inbound/webhook`。
 
 1. 启用各域名 Email Routing
 2. 上传 Worker 脚本（绑定 `WEBHOOK_URL`）
-3. 注入 `WEBHOOK_SECRETS`（域名→签名密钥 JSON）
+3. 注入 `WEBHOOK_SECRETS`（域名→`{zone_id, secret}` JSON 映射）
 4. 为账号下每个域名配置 catch-all → Worker
 
 新增域名后，再次点击「一键部署」即可更新密钥映射与路由。
