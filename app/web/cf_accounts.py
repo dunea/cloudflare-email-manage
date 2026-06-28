@@ -36,7 +36,10 @@ TOKEN_PERMISSIONS = [
 ]
 
 TOKEN_SETUP_NOTES = [
-    "支持 User API Token（My Profile → API Tokens）和 Account API Token（Manage Account → API Tokens）。",
+    (
+        "支持 User API Token (My Profile → API Tokens) "
+        "和 Account API Token (Manage Account → API Tokens)。"
+    ),
     "Account API Token 必须同时填写所属 Cloudflare Account ID。",
     "Cloudflare 权限编辑器需要分别添加「整个账户」和「所有域名」两组策略。",
     "整个账户权限只需要 Workers Scripts、Email Routing Addresses、Email Sending 的 Edit。",

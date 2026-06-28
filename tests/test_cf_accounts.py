@@ -55,6 +55,7 @@ def _patch_verify_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_verify_account(
         self: CloudflareClient, account_id: str
     ) -> dict[str, str]:
+        """模拟 Account Token 校验成功。"""
         return {"status": "active"}
 
     async def _fake_list_accounts(self: CloudflareClient) -> list[dict[str, str]]:
@@ -296,11 +297,13 @@ async def test_bind_account_token_uses_account_verify(
     seen: list[str] = []
 
     async def _unexpected_user_verify(self: CloudflareClient) -> dict[str, str]:
+        """确保账号令牌不会走用户级校验。"""
         raise AssertionError("Account API Token 不应调用 user token verify")
 
     async def _account_verify(
         self: CloudflareClient, account_id: str
     ) -> dict[str, str]:
+        """记录账号级校验使用的 Account ID。"""
         seen.append(account_id)
         return {"status": "active"}
 
@@ -328,6 +331,7 @@ async def test_bind_unprefixed_token_falls_back_to_account_verify(
     seen: list[str] = []
 
     async def _user_verify_auth_failure(self: CloudflareClient) -> dict[str, str]:
+        """模拟用户级 Token 校验返回认证失败。"""
         raise CloudflareError(
             "Cloudflare API 返回失败 (HTTP 403; GET /user/tokens/verify): "
             "[{'code': 10000, 'message': 'Authentication error'}]",
@@ -340,6 +344,7 @@ async def test_bind_unprefixed_token_falls_back_to_account_verify(
     async def _account_verify(
         self: CloudflareClient, account_id: str
     ) -> dict[str, str]:
+        """记录回退账号级校验使用的 Account ID。"""
         seen.append(account_id)
         return {"status": "active"}
 
@@ -871,6 +876,7 @@ async def test_cloudflare_client_verify_account_token_success() -> None:
     """verify_account_token 使用账号级校验接口。"""
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """断言账号级 verify 请求路径并返回成功。"""
         assert request.url.path.endswith("/accounts/acc1/tokens/verify")
         assert request.headers["Authorization"] == "Bearer tok"
         return httpx.Response(
@@ -904,6 +910,7 @@ async def test_cloudflare_client_verify_account_token_failure_raises() -> None:
     """账号级 Token 校验失败时保留 Cloudflare 路径信息。"""
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """返回账号级 verify 的 Cloudflare 认证失败响应。"""
         return httpx.Response(
             403,
             json={

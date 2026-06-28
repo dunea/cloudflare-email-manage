@@ -498,7 +498,7 @@ async def inspect_token_permissions(
         items.append(_make_item(ZONE_REQUIREMENT, "failed", message))
         report = _report(
             checked_at=checked_at,
-            account_id=resolved_account_id or account_id,
+            account_id=resolved_account_id or requested_account_id,
             zone_count=0,
             items=items,
         )
