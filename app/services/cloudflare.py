@@ -413,7 +413,7 @@ class CloudflareClient:
     # ---- Token 校验 ----
 
     async def verify_token(self) -> TokenVerifyResult:
-        """校验 API Token 有效性（GET /user/tokens/verify）。"""
+        """校验 API Token 有效性 (GET /user/tokens/verify)。"""
         if settings.CF_FAKE_MODE:
             return {"status": "active"}
         result = await self._request("GET", "/user/tokens/verify")
