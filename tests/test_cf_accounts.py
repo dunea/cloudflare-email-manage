@@ -332,6 +332,41 @@ async def test_bind_rejects_missing_email_routing_write(
     assert rows == []
 
 
+async def test_bind_unknown_probe_response_does_not_claim_missing_permission(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """未兼容的探测响应不应误导用户继续添加权限。"""
+    _patch_verify_ok(monkeypatch)
+
+    async def _routing_unknown_response(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, str]:
+        raise CloudflareError(
+            "Email Routing 规则写权限探测失败："
+            "Cloudflare 返回了应用暂未兼容的探测响应，无法确认写权限；"
+            "这不代表 Token 一定缺少权限。响应摘要：HTTP 418; "
+            "Cloudflare errors: code=9999, message=unexpected"
+        )
+
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_email_routing_rules_write",
+        _routing_unknown_response,
+    )
+    token = await _register_and_login(client)
+    resp = await _bind(client, token)
+    assert resp.status_code == 403
+    item = [
+        item for item in resp.json()["data"]["items"] if item["key"] == "email_routing"
+    ][0]
+    assert item["status"] == "failed"
+    assert "不代表 Token 一定缺少权限" in item["message"]
+    assert "不一定是 Token 权限不足" in item["fix_hint"]
+    assert "添加 Email Routing" not in item["fix_hint"]
+    rows = (await db_session.execute(select(CFAccount))).scalars().all()
+    assert rows == []
+
+
 async def test_bind_checks_email_routing_write_for_all_zones(
     client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
