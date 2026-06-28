@@ -201,10 +201,10 @@ async def sync_domains(
 async def deploy_worker(
     account_id: int, current_user: CurrentUser, session: SessionDep
 ) -> ApiResponse[WorkerDeployResult] | JSONResponse:
-    """为该 CF 账号部署/更新账号级收件 Worker，并配置所有域名的 catch-all。
+    """为该 CF 账号部署/更新账号级收件 Worker，并配置邮箱域名的 catch-all。
 
     流程：启用 Email Routing → 上传 Worker 脚本 → 设置域名→密钥 secret →
-    为每个域名配置 catch-all → Worker。CF API Token 需具备
+    为每个已启用收件路由的邮箱域名配置 catch-all → Worker。CF API Token 需具备
     Account:Workers Scripts:Edit 权限。
     """
     cf_account = await cf_account_service.get_cf_account_or_404(

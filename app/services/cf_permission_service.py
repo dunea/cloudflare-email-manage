@@ -1,8 +1,9 @@
 """Cloudflare API Token 权限预检服务。
 
-绑定 CF 账号前统一检查平台核心能力：域名读取、Email Routing、目标地址、
-Email Sending 与 Workers Scripts。写权限检查使用无效 payload 探测，
-不创建路由、不创建目标地址、不发送邮件、不创建 Worker、不写 secret。
+绑定 CF 账号前统一检查平台核心能力：域名读取、目标地址、Email Sending
+与 Workers Scripts。Email Routing 的 Zone 级能力只在部署时按启用收件
+的域名范围检查。写权限检查使用无效 payload 探测，不创建路由、
+不创建目标地址、不发送邮件、不创建 Worker、不写 secret。
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ ZONE_REQUIREMENT = PermissionRequirement(
     key="zone_read",
     label="域名读取",
     required_permission="Zone:Zone:Read / Zone Read",
-    fix_hint="在所有域名或指定域名权限中添加 Zone 读取权限，并确保资源范围覆盖要接入的域名。",
+    fix_hint="在邮箱域名或指定域名权限中添加 Zone 读取权限，并确保资源范围覆盖要接入的域名。",
 )
 
 EMAIL_ROUTING_SETTINGS_REQUIREMENT = PermissionRequirement(
@@ -62,7 +63,7 @@ EMAIL_ROUTING_SETTINGS_REQUIREMENT = PermissionRequirement(
     label="Email Routing 设置",
     required_permission="Zone:Zone Settings:Edit / Zone Settings Write",
     fix_hint=(
-        "在所有域名或指定域名权限中添加 Zone Settings 编辑权限；"
+        "在邮箱域名或指定域名权限中添加 Zone Settings 编辑权限；"
         "一键部署需要读取并启用 Email Routing 状态。"
     ),
 )
@@ -72,7 +73,7 @@ EMAIL_ROUTING_REQUIREMENT = PermissionRequirement(
     label="Email Routing 规则",
     required_permission="Zone:Email Routing Rules:Edit / Email Routing Rules Write",
     fix_hint=(
-        "在所有域名或指定域名权限中添加 Email Routing Rules 编辑权限，"
+        "在邮箱域名或指定域名权限中添加 Email Routing Rules 编辑权限，"
         "用于创建邮箱路由和 catch-all。"
     ),
 )
@@ -383,7 +384,7 @@ async def _check_email_routing_rules_write(
 async def _check_email_routing_settings_for_zones(
     client: CloudflareClient, zones: list[dict[str, object]]
 ) -> None:
-    """检查所有可访问 Zone 的 Email Routing 设置读取能力。"""
+    """检查指定 Zone 的 Email Routing 设置读取能力。"""
     for zone in zones:
         zone_id = str(zone.get("id") or "")
         if not zone_id:
@@ -404,7 +405,7 @@ async def _check_destination_addresses_write(
 async def _check_email_routing_rules_write_for_zones(
     client: CloudflareClient, zones: list[dict[str, object]]
 ) -> None:
-    """检查所有可访问 Zone 的 Email Routing 规则读可达与写权限。"""
+    """检查指定 Zone 的 Email Routing 规则读可达与写权限。"""
     for zone in zones:
         zone_id = str(zone.get("id") or "")
         if not zone_id:
@@ -414,10 +415,120 @@ async def _check_email_routing_rules_write_for_zones(
         await _check_email_routing_rules_write(client, zone_id)
 
 
+def _filter_target_zones(
+    zones: list[dict[str, object]], target_zone_ids: set[str]
+) -> tuple[list[dict[str, object]], set[str]]:
+    """按目标 zone_id 过滤 Zone，返回命中的 Zone 与缺失的 zone_id。"""
+    target_zones: list[dict[str, object]] = []
+    found_ids: set[str] = set()
+    for zone in zones:
+        zone_id = str(zone.get("id") or "")
+        if zone_id and zone_id in target_zone_ids:
+            target_zones.append(zone)
+            found_ids.add(zone_id)
+    return target_zones, target_zone_ids - found_ids
+
+
+async def _add_deferred_email_routing_checks(
+    items: list[CFPermissionCheckItem],
+) -> None:
+    """绑定阶段跳过 Zone 级 Email Routing 探测，部署时再按邮箱域名检查。"""
+    items.append(
+        _make_item(
+            EMAIL_ROUTING_SETTINGS_REQUIREMENT,
+            "passed",
+            "绑定阶段不再探测所有域名的 Email Routing 设置；"
+            "一键部署时只检查已启用收件路由的邮箱域名。",
+        )
+    )
+    items.append(
+        _make_item(
+            EMAIL_ROUTING_REQUIREMENT,
+            "passed",
+            "绑定阶段不再探测所有域名的 Email Routing 规则；"
+            "一键部署时只检查已启用收件路由的邮箱域名。",
+        )
+    )
+
+
+async def _add_target_email_routing_checks(
+    items: list[CFPermissionCheckItem],
+    client: CloudflareClient,
+    zones: list[dict[str, object]],
+    target_zone_ids: set[str],
+) -> None:
+    """按启用收件的目标域名检查 Email Routing 设置和规则权限。"""
+    if not target_zone_ids:
+        items.append(
+            _make_item(
+                EMAIL_ROUTING_SETTINGS_REQUIREMENT,
+                "passed",
+                "当前没有启用收件路由的邮箱域名，已跳过 Email Routing 设置探测。",
+            )
+        )
+        items.append(
+            _make_item(
+                EMAIL_ROUTING_REQUIREMENT,
+                "passed",
+                "当前没有启用收件路由的邮箱域名，已跳过 Email Routing 规则探测。",
+            )
+        )
+        return
+
+    target_zones, missing_zone_ids = _filter_target_zones(zones, target_zone_ids)
+    if missing_zone_ids:
+        missing = "、".join(sorted(missing_zone_ids))
+        message = (
+            "Token 的 Zone 资源范围未覆盖已启用收件路由的邮箱域名："
+            f"{missing}。请调整 Token 资源范围或重新同步域名。"
+        )
+        fix_hint = (
+            "请确保 Token 的指定域名权限覆盖所有已启用收件路由的域名，"
+            "并为这些域名添加 Zone Settings 和 Email Routing Rules 编辑权限。"
+        )
+        items.append(
+            _make_item(
+                EMAIL_ROUTING_SETTINGS_REQUIREMENT,
+                "failed",
+                message,
+                fix_hint,
+            )
+        )
+        items.append(
+            _make_item(
+                EMAIL_ROUTING_REQUIREMENT,
+                "failed",
+                message,
+                fix_hint,
+            )
+        )
+        return
+
+    target_count = len(target_zones)
+    await _add_cloudflare_check(
+        items,
+        EMAIL_ROUTING_SETTINGS_REQUIREMENT,
+        lambda: _check_email_routing_settings_for_zones(client, target_zones),
+        f"已通过 {target_count} 个邮箱域名的 Email Routing 设置读取权限探测。",
+    )
+    await _add_cloudflare_check(
+        items,
+        EMAIL_ROUTING_REQUIREMENT,
+        lambda: _check_email_routing_rules_write_for_zones(client, target_zones),
+        f"已通过 {target_count} 个邮箱域名的 Email Routing 规则读/写权限探测。",
+    )
+
+
 async def inspect_token_permissions(
-    api_token: str, account_id: str | None = None
+    api_token: str,
+    account_id: str | None = None,
+    target_zone_ids: set[str] | None = None,
 ) -> TokenPermissionCheckResult:
-    """检查一个未入库 Token 的核心权限，返回结构化报告。"""
+    """检查一个未入库 Token 的核心权限，返回结构化报告。
+
+    target_zone_ids 为 None 时，跳过 Zone 级 Email Routing 探测；
+    传入集合时，仅检查这些已启用收件路由的域名。
+    """
     checked_at = _now()
     requested_account_id = _clean_account_id(account_id)
     try:
@@ -531,18 +642,12 @@ async def inspect_token_permissions(
             f"已读取到 {len(zones)} 个可访问域名。",
         )
     )
-    await _add_cloudflare_check(
-        items,
-        EMAIL_ROUTING_SETTINGS_REQUIREMENT,
-        lambda: _check_email_routing_settings_for_zones(client, zones),
-        f"已通过 {len(zones)} 个域名的 Email Routing 设置读取权限探测。",
-    )
-    await _add_cloudflare_check(
-        items,
-        EMAIL_ROUTING_REQUIREMENT,
-        lambda: _check_email_routing_rules_write_for_zones(client, zones),
-        f"已通过 {len(zones)} 个域名的 Email Routing 规则读/写权限探测。",
-    )
+    if target_zone_ids is None:
+        await _add_deferred_email_routing_checks(items)
+    else:
+        await _add_target_email_routing_checks(
+            items, client, zones, {str(zone_id) for zone_id in target_zone_ids}
+        )
     await _add_cloudflare_check(
         items,
         DESTINATION_ADDRESS_REQUIREMENT,
@@ -591,18 +696,24 @@ def store_report(cf_account: CFAccount, report: CFPermissionReport) -> None:
     cf_account.capability_checked_at = report.checked_at
 
 
-async def inspect_bound_account(cf_account: CFAccount) -> CFPermissionReport:
+async def inspect_bound_account(
+    cf_account: CFAccount, target_zone_ids: set[str] | None = None
+) -> CFPermissionReport:
     """检查已绑定账号当前 Token 的权限。"""
     token = decrypt_token(cf_account.encrypted_api_token)
-    result = await inspect_token_permissions(token, cf_account.account_id)
+    result = await inspect_token_permissions(
+        token, cf_account.account_id, target_zone_ids
+    )
     return result.report
 
 
 async def refresh_cf_account_permissions(
-    session: AsyncSession, cf_account: CFAccount
+    session: AsyncSession,
+    cf_account: CFAccount,
+    target_zone_ids: set[str] | None = None,
 ) -> CFPermissionReport:
     """重新检查已绑定账号权限，并保存最近一次报告。"""
-    report = await inspect_bound_account(cf_account)
+    report = await inspect_bound_account(cf_account, target_zone_ids)
     store_report(cf_account, report)
     await session.commit()
     await session.refresh(cf_account)

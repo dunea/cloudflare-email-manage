@@ -55,6 +55,7 @@ async def create_email_address(
         existing.user_id = user.id
         existing.domain_id = domain.id
         existing.local_part = local_part
+        domain.inbound_routing_enabled = True
         # 复活时若缺少公开令牌则补一个
         if not existing.public_token:
             existing.public_token = _new_public_token()
@@ -69,6 +70,7 @@ async def create_email_address(
         full_address=full_address,
         public_token=_new_public_token(),
     )
+    domain.inbound_routing_enabled = True
     session.add(email_address)
     await session.commit()
     await session.refresh(email_address)

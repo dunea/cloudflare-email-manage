@@ -11,10 +11,10 @@
 平台已支持一键部署 Worker。直接登录平台 → CF 账号详情 → 点击「一键部署 Worker」
 即可，平台会用你已绑定的 CF API Token 自动：
 
-1. 启用各域名 Email Routing
+1. 启用各邮箱域名 Email Routing
 2. 上传 Worker 脚本（含 `WEBHOOK_URL` binding）
 3. 注入 `WEBHOOK_SECRETS`（域名→`{zone_id, secret}` JSON 映射）
-4. 为每个域名配置 catch-all → Worker
+4. 为每个已启用收件路由的邮箱域名配置 catch-all → Worker
 
 无需本机 Node 环境，无需 wrangler，无需手动配路由。
 
@@ -95,7 +95,7 @@ npx esbuild src/index.js --bundle --format=esm --platform=browser \
 
 | 现象 | 可能原因 | 排查 |
 |------|---------|------|
-| Worker 报错「未找到域名 X 对应的签名密钥」 | `WEBHOOK_SECRETS` 中缺少该域名 | 同步域名后在平台重新一键部署 |
+| Worker 报错「未找到域名 X 对应的签名密钥」 | `WEBHOOK_SECRETS` 中缺少该域名 | 先在该域名下创建邮箱地址，再在平台重新一键部署 |
 | 平台返回 401 | 签名不匹配 | 确认 Worker 的 `WEBHOOK_SECRETS` 中该域名 `secret` 字段与平台 `Domain.webhook_secret` 一致 |
 | Worker 日志出现 `Webhook 请求失败` | `WEBHOOK_URL` 不可达或网络异常 | 从 Worker 所在网络 `curl` 测试平台收件端点；检查 `wrangler tail` 错误堆栈 |
 | 平台返回 422 | 载荷结构异常 | 用 `wrangler tail` 查看请求体 |

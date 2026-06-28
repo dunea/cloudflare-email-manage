@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.models  # noqa: F401  确保模型注册
 from app.config import settings
-from app.exceptions import AppException, CFPermissionPrecheckError
+from app.exceptions import AppException, CFPermissionPrecheckError, CloudflareError
 from app.models import CFAccount, Domain, User
 from app.services import worker_deploy_service
 from app.services.cloudflare import CloudflareClient
@@ -53,6 +53,7 @@ async def _make_user_with_account_and_domains(
     *,
     username: str = "owner",
     domains: list[tuple[str, str]] | None = None,
+    enabled_zone_ids: set[str] | None = None,
     account_id: str = "acc-1",
 ) -> tuple[User, CFAccount, list[Domain]]:
     """直接在 DB 构造用户 + CF 账号 + 域名（用于 service 单测，跳过 HTTP 绑定）。"""
@@ -72,13 +73,20 @@ async def _make_user_with_account_and_domains(
     db_session.add(cf_account)
     await db_session.flush()
     out: list[Domain] = []
-    for zone_id, name in domains or [("zone-a", "example.com")]:
+    domain_specs = [("zone-a", "example.com")] if domains is None else domains
+    enabled = (
+        {zone_id for zone_id, _name in domain_specs}
+        if enabled_zone_ids is None
+        else enabled_zone_ids
+    )
+    for zone_id, name in domain_specs:
         d = Domain(
             cf_account_id=cf_account.id,
             zone_id=zone_id,
             domain_name=name,
             status="active",
             webhook_secret="init-secret",
+            inbound_routing_enabled=zone_id in enabled,
         )
         db_session.add(d)
         out.append(d)
@@ -102,6 +110,9 @@ def _patch_deploy_ok(
         "catch_all_calls": [],
         "enable_calls": [],
         "list_zones_account_ids": [],
+        "routing_rules_calls": [],
+        "routing_probe_calls": [],
+        "status_calls": [],
     }
 
     async def _verify(self: CloudflareClient) -> dict[str, str]:
@@ -137,6 +148,9 @@ def _patch_deploy_ok(
     async def _list_routing_rules(
         self: CloudflareClient, zone_id: str
     ) -> list[dict[str, object]]:
+        calls = captured["routing_rules_calls"]
+        assert isinstance(calls, list)
+        calls.append(zone_id)
         return []
 
     async def _list_destinations(
@@ -152,6 +166,9 @@ def _patch_deploy_ok(
     async def _probe_email_routing_rules_write(
         self: CloudflareClient, zone_id: str
     ) -> dict[str, str]:
+        calls = captured["routing_probe_calls"]
+        assert isinstance(calls, list)
+        calls.append(zone_id)
         return {"status": "ok"}
 
     async def _probe_destination_addresses_write(
@@ -172,6 +189,9 @@ def _patch_deploy_ok(
     async def _status(
         self: CloudflareClient, zone_id: str
     ) -> dict[str, object]:
+        calls = captured["status_calls"]
+        assert isinstance(calls, list)
+        calls.append(zone_id)
         return {"enabled": True, "status": "ready"}
 
     async def _enable(self: CloudflareClient, zone_id: str) -> dict[str, object]:
@@ -299,6 +319,64 @@ async def test_deploy_success(
     assert parsed["b.com"]["secret"] == "init-secret"
 
 
+async def test_deploy_only_enabled_email_domains(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """只部署已启用收件路由的邮箱域名，跳过账号下其他域名。"""
+    _user, cf_account, _domains = await _make_user_with_account_and_domains(
+        db_session,
+        domains=[("z1", "mail.com"), ("z2", "kenginet.com")],
+        enabled_zone_ids={"z1"},
+    )
+    cap = _patch_deploy_ok(monkeypatch)
+
+    result = await worker_deploy_service.deploy_worker_for_account(
+        db_session, cf_account
+    )
+
+    assert [d.domain_name for d in result.domains] == ["mail.com"]
+    assert cap["routing_rules_calls"] == ["z1"]
+    assert cap["routing_probe_calls"] == ["z1"]
+    status_calls = cap["status_calls"]
+    assert isinstance(status_calls, list)
+    assert status_calls == ["z1", "z1"]
+    catch = cap["catch_all_calls"]
+    assert isinstance(catch, list)
+    assert catch == [("z1", "cf-email-manager-webhook")]
+    last_secret_json = cap["last_secret_json"]
+    assert isinstance(last_secret_json, str)
+    assert set(_json.loads(last_secret_json)) == {"mail.com"}
+
+
+async def test_deploy_ignores_disabled_domain_routing_forbidden(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """非邮箱域名即使 Email Routing 设置不可访问，也不影响部署。"""
+    _user, cf_account, _domains = await _make_user_with_account_and_domains(
+        db_session,
+        domains=[("z1", "mail.com"), ("z2", "kenginet.com")],
+        enabled_zone_ids={"z1"},
+    )
+    _patch_deploy_ok(monkeypatch)
+
+    async def _status_forbidden_on_disabled(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, object]:
+        if zone_id == "z2":
+            raise CloudflareError("HTTP 403: zone settings forbidden")
+        return {"enabled": True, "status": "ready"}
+
+    monkeypatch.setattr(
+        CloudflareClient, "get_email_routing_status", _status_forbidden_on_disabled
+    )
+
+    result = await worker_deploy_service.deploy_worker_for_account(
+        db_session, cf_account
+    )
+
+    assert [d.zone_id for d in result.domains] == ["z1"]
+
+
 async def test_deploy_generates_missing_webhook_secret(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -324,8 +402,30 @@ async def test_deploy_no_domain_raises(
     _user, cf_account, _ = await _make_user_with_account_and_domains(
         db_session, domains=[]
     )
+    _patch_deploy_ok(monkeypatch)
     with pytest.raises(AppException):
         await worker_deploy_service.deploy_worker_for_account(db_session, cf_account)
+
+
+async def test_deploy_no_enabled_email_domain_raises_without_cf_write(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """没有启用收件路由的邮箱域名时，部署前失败且不写 CF。"""
+    _user, cf_account, _domains = await _make_user_with_account_and_domains(
+        db_session,
+        domains=[("z1", "mail.com"), ("z2", "kenginet.com")],
+        enabled_zone_ids=set(),
+    )
+    cap = _patch_deploy_ok(monkeypatch)
+
+    with pytest.raises(AppException) as ei:
+        await worker_deploy_service.deploy_worker_for_account(db_session, cf_account)
+
+    assert "尚无启用收件路由的邮箱域名" in ei.value.message
+    assert cap["upload_calls"] == 0
+    assert cap["secret_calls"] == 0
+    assert cap["catch_all_calls"] == []
+    assert cap["status_calls"] == []
 
 
 async def test_deploy_upload_failure_wraps_permission_hint(
@@ -580,6 +680,7 @@ async def test_api_deploy_worker_success(
             domain_name="a.com",
             status="active",
             webhook_secret="s",
+            inbound_routing_enabled=True,
         )
     )
     await db_session.commit()
@@ -653,6 +754,7 @@ async def test_web_deploy_worker_form_success(
             domain_name="a.com",
             status="active",
             webhook_secret="s",
+            inbound_routing_enabled=True,
         )
     )
     await db_session.commit()
@@ -706,6 +808,7 @@ async def test_web_deploy_worker_zone_settings_error_uses_short_flash(
             domain_name="a.com",
             status="active",
             webhook_secret="s",
+            inbound_routing_enabled=True,
         )
     )
     await db_session.commit()

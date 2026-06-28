@@ -4,17 +4,17 @@
   - ``WEBHOOK_URL``：平台收件端点（plain_text）
   - ``WEBHOOK_SECRETS``：域名 -> ``{zone_id, secret}`` 的 JSON 映射（secret）
 
-并为该账号下每个域名配置 Email Routing catch-all -> Worker，
-使域名下任意地址的邮件都投递到该 Worker。
+并为该账号下已启用收件路由的邮箱域名配置 Email Routing catch-all -> Worker，
+使这些域名下任意地址的邮件都投递到该 Worker。
 
 部署流程：
   1. 校验 APP_BASE_URL 非 localhost（生产防呆）
-  2. 加载该账号下所有域名，为缺失 webhook_secret 的域名预生成密钥（仅内存）
-  3. 启用每个域名的 Email Routing（若未启用）
+  2. 加载该账号下已启用收件路由的邮箱域名，为缺失 webhook_secret 的域名预生成密钥（仅内存）
+  3. 启用每个邮箱域名的 Email Routing（若未启用）
   4. 上传 Worker bundle 脚本（含 WEBHOOK_URL binding）
   5. **commit 新生成的 webhook_secret 到 DB**（先持久化密钥）
   6. 设置 WEBHOOK_SECRETS secret（{zone_id, secret} 映射，Worker 签名密钥生效）
-  7. 对每个域名配置 catch-all -> Worker（最后一步，邮件开始流入）
+  7. 对每个邮箱域名配置 catch-all -> Worker（最后一步，邮件开始流入）
 
 任一步骤失败抛 CloudflareError/Exception：此时 catch-all 未配置，邮件不会
 进入 Worker；即使 DB 已 commit 了新 secret，Worker 端仍是旧/无 secret，
@@ -100,7 +100,7 @@ def _raise_deploy_cloudflare_error(
     if error_is_permission:
         if "Email Routing" in stage:
             permission_hint = (
-                " 请确认 Token 在所有域名或指定域名权限中具备 "
+                " 请确认 Token 在已启用收件路由的邮箱域名权限中具备 "
                 "Zone Settings:Edit / Zone Settings Write，"
                 "并且资源范围覆盖该域名。"
             )
@@ -250,38 +250,34 @@ async def deploy_worker_for_account(
     """为指定 CF 账号一键部署收件 Worker，返回部署结果。
 
     调用顺序: 校验 APP_BASE_URL -> 预生成缺失密钥（仅内存）-> 启用 Email Routing
-    -> 上传脚本 -> **commit 新密钥** -> 设置 secret -> 配置每个域名的 catch-all。
+    -> 上传脚本 -> **commit 新密钥** -> 设置 secret -> 配置每个邮箱域名的 catch-all。
     commit 在 set_worker_secret 之前：避免 catch-all 已配置但 DB 未持久化导致
     邮件进入 Worker 后验签失败。
     """
     _validate_public_base_url()
 
-    # 1. 加载该账号下所有域名
-    domains = list(
+    # 1. 加载该账号下所有域名，并筛选已启用收件路由的邮箱域名
+    all_domains = list(
         (
             await session.execute(
                 select(Domain).where(Domain.cf_account_id == cf_account.id)
             )
         ).scalars()
     )
-    if not domains:
+    if not all_domains:
         raise AppException(
             "该 CF 账号下尚无域名，请先同步域名后再部署 Worker",
             code=1400,
         )
-
-    # 部署前重新检查 Token 核心能力，避免旧 Token 权限被外部收回后进入半部署状态。
-    try:
-        report = await cf_permission_service.refresh_cf_account_permissions(
-            session, cf_account
+    domains = [
+        domain for domain in all_domains if domain.inbound_routing_enabled
+    ]
+    if not domains:
+        raise AppException(
+            "该 CF 账号下尚无启用收件路由的邮箱域名。"
+            "请先创建邮箱地址；创建新的邮箱域名后需要重新一键部署 Worker。",
+            code=1400,
         )
-    except CloudflareError as exc:
-        _raise_deploy_cloudflare_error(
-            "权限复检失败",
-            exc,
-            account_id=cf_account.account_id,
-        )
-    cf_permission_service.ensure_report_passed(report)
 
     client = build_client(cf_account)
     try:
@@ -293,13 +289,28 @@ async def deploy_worker_for_account(
             account_id=cf_account.account_id,
         )
 
+    # 部署前重新检查 Token 核心能力；Zone 级 Email Routing 仅检查邮箱域名。
+    try:
+        report = await cf_permission_service.refresh_cf_account_permissions(
+            session,
+            cf_account,
+            target_zone_ids={domain.zone_id for domain in domains},
+        )
+    except CloudflareError as exc:
+        _raise_deploy_cloudflare_error(
+            "权限复检失败",
+            exc,
+            account_id=cf_account.account_id,
+        )
+    cf_permission_service.ensure_report_passed(report)
+
     # 2. 内存中预生成缺失的 webhook_secret（延后 commit）
     _prepare_domain_secrets(domains)
 
     webhook_url = _platform_webhook_url()
     bundle_bytes = _read_bundle()
 
-    # 3. 启用每个域名的 Email Routing（幂等: 已启用则无害）
+    # 3. 启用每个邮箱域名的 Email Routing（幂等: 已启用则无害）
     deployed: list[DeployedDomain] = []
     for domain in domains:
         try:
@@ -346,7 +357,7 @@ async def deploy_worker_for_account(
     # 5. 先 commit 新生成的 webhook_secret（DB 优先成为真相源）
     await session.commit()
 
-    # 6. 设置 WEBHOOK_SECRETS secret（域名 -> {zone_id, secret} JSON 映射）
+    # 6. 设置 WEBHOOK_SECRETS secret（邮箱域名 -> {zone_id, secret} JSON 映射）
     secrets_map = {
         d.domain_name.lower(): {"zone_id": d.zone_id, "secret": d.webhook_secret}
         for d in domains
@@ -366,7 +377,7 @@ async def deploy_worker_for_account(
             account_id=cf_account.account_id,
         )
 
-    # 7. 对每个域名配置 catch-all -> Worker（最后一步，邮件开始流入）
+    # 7. 对每个邮箱域名配置 catch-all -> Worker（最后一步，邮件开始流入）
     for domain in domains:
         try:
             await client.update_catch_all_to_worker(domain.zone_id, WORKER_NAME)

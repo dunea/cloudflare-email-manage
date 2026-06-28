@@ -248,12 +248,12 @@ Worker 示例位于 [`examples/worker/`](examples/worker/)，包含 `wrangler.to
 
 绑定 CF 账号后，如果 Token 权限预检通过，可以在 CF 账号详情页点击「一键部署 Worker」。平台会自动完成：
 
-1. 启用各域名 Email Routing
+1. 启用各邮箱域名 Email Routing
 2. 上传 Worker 脚本并绑定 `WEBHOOK_URL`
 3. 注入 `WEBHOOK_SECRETS`
-4. 为账号下域名配置 catch-all 到 Worker
+4. 为已启用收件路由的邮箱域名配置 catch-all 到 Worker
 
-新增域名后再次部署即可更新密钥映射与路由。
+创建某域名下第一个邮箱地址后，该域名会启用收件路由；启用新的邮箱域名后再次部署即可更新密钥映射与路由。
 
 ### 手动部署 Worker
 

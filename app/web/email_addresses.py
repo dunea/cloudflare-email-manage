@@ -104,11 +104,21 @@ async def create_email_address(
     """创建邮箱地址。"""
     try:
         data = EmailAddressCreate(domain_id=domain_id, local_part=local_part)
+        domain = await domain_service.get_domain_or_404(session, data.domain_id, user)
+        was_new_email_domain = not domain.inbound_routing_enabled
         await email_service.create_email_address(session, user, data)
     except (ValidationError, AppException) as exc:
         flash(request, error_message(exc), "error")
         return RedirectResponse("/email-addresses", status_code=303)
-    flash(request, "已创建邮箱地址", "success")
+    if was_new_email_domain:
+        flash(
+            request,
+            "已创建邮箱地址。该域名已启用收件路由，请重新一键部署 Worker 后开始收件；"
+            "以后启用新的邮箱域名也需要重新部署。",
+            "success",
+        )
+    else:
+        flash(request, "已创建邮箱地址", "success")
     return RedirectResponse("/email-addresses", status_code=303)
 
 

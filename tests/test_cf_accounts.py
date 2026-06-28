@@ -410,15 +410,18 @@ async def test_bind_rejects_missing_workers_permission(
     assert rows == []
 
 
-async def test_bind_rejects_missing_email_routing_write(
+async def test_bind_defers_email_routing_write_probe(
     client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Email Routing 只能读不能写时拒绝绑定。"""
+    """绑定阶段不再探测所有域名的 Email Routing 写权限。"""
     _patch_verify_ok(monkeypatch)
+    called = False
 
     async def _routing_write_forbidden(
         self: CloudflareClient, zone_id: str
     ) -> dict[str, str]:
+        nonlocal called
+        called = True
         raise CloudflareError("HTTP 403: missing Email Routing Rules Write")
 
     monkeypatch.setattr(
@@ -428,25 +431,31 @@ async def test_bind_rejects_missing_email_routing_write(
     )
     token = await _register_and_login(client)
     resp = await _bind(client, token)
-    assert resp.status_code == 403
+    assert resp.status_code == 201
+    assert called is False
     item = [
-        item for item in resp.json()["data"]["items"] if item["key"] == "email_routing"
+        item
+        for item in resp.json()["data"]["capability_report"]["items"]
+        if item["key"] == "email_routing"
     ][0]
-    assert item["status"] == "failed"
-    assert "Email Routing" in item["required_permission"]
+    assert item["status"] == "passed"
+    assert "一键部署时" in item["message"]
     rows = (await db_session.execute(select(CFAccount))).scalars().all()
-    assert rows == []
+    assert len(rows) == 1
 
 
-async def test_bind_rejects_missing_email_routing_settings_permission(
+async def test_bind_defers_email_routing_settings_permission(
     client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """缺少 Zone Settings 时，部署前必需的 Email Routing 设置检查失败。"""
+    """绑定阶段不再探测所有域名的 Email Routing 设置权限。"""
     _patch_verify_ok(monkeypatch)
+    called = False
 
     async def _routing_settings_forbidden(
         self: CloudflareClient, zone_id: str
     ) -> dict[str, object]:
+        nonlocal called
+        called = True
         raise CloudflareError(
             "Cloudflare API 返回失败 (HTTP 403; GET "
             f"/zones/{zone_id}/email/routing): "
@@ -463,29 +472,32 @@ async def test_bind_rejects_missing_email_routing_settings_permission(
 
     token = await _register_and_login(client)
     resp = await _bind(client, token)
-    assert resp.status_code == 403
+    assert resp.status_code == 201
+    assert called is False
     item = [
         item
-        for item in resp.json()["data"]["items"]
+        for item in resp.json()["data"]["capability_report"]["items"]
         if item["key"] == "email_routing_settings"
     ][0]
-    assert item["status"] == "failed"
+    assert item["status"] == "passed"
     assert "Zone Settings" in item["required_permission"]
-    assert "Zone Settings" in item["message"]
-    assert "Zone Settings" in item["fix_hint"]
+    assert "一键部署时" in item["message"]
     rows = (await db_session.execute(select(CFAccount))).scalars().all()
-    assert rows == []
+    assert len(rows) == 1
 
 
-async def test_bind_unknown_probe_response_does_not_claim_missing_permission(
+async def test_bind_deferred_probe_does_not_call_unknown_routing_probe(
     client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """未兼容的探测响应不应误导用户继续添加权限。"""
+    """绑定阶段跳过 Email Routing 规则探测，因此不会暴露未兼容探测响应。"""
     _patch_verify_ok(monkeypatch)
+    called = False
 
     async def _routing_unknown_response(
         self: CloudflareClient, zone_id: str
     ) -> dict[str, str]:
+        nonlocal called
+        called = True
         raise CloudflareError(
             "Email Routing 规则写权限探测失败："
             "Cloudflare 返回了应用暂未兼容的探测响应，无法确认写权限；"
@@ -500,22 +512,23 @@ async def test_bind_unknown_probe_response_does_not_claim_missing_permission(
     )
     token = await _register_and_login(client)
     resp = await _bind(client, token)
-    assert resp.status_code == 403
+    assert resp.status_code == 201
+    assert called is False
     item = [
-        item for item in resp.json()["data"]["items"] if item["key"] == "email_routing"
+        item
+        for item in resp.json()["data"]["capability_report"]["items"]
+        if item["key"] == "email_routing"
     ][0]
-    assert item["status"] == "failed"
-    assert "不代表 Token 一定缺少权限" in item["message"]
-    assert "不一定是 Token 权限不足" in item["fix_hint"]
-    assert "添加 Email Routing" not in item["fix_hint"]
+    assert item["status"] == "passed"
+    assert "一键部署时" in item["message"]
     rows = (await db_session.execute(select(CFAccount))).scalars().all()
-    assert rows == []
+    assert len(rows) == 1
 
 
-async def test_bind_checks_email_routing_write_for_all_zones(
+async def test_bind_skips_email_routing_write_for_all_zones(
     client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """多域名中任一 Zone 缺 Email Routing 写权限时拒绝绑定。"""
+    """绑定多域名账号时不再逐个探测 Email Routing 写权限。"""
     _patch_verify_ok(monkeypatch)
 
     async def _two_zones(
@@ -553,20 +566,22 @@ async def test_bind_checks_email_routing_write_for_all_zones(
 
     token = await _register_and_login(client)
     resp = await _bind(client, token)
-    assert resp.status_code == 403
-    assert probed_zone_ids == ["zone-a", "zone-b"]
+    assert resp.status_code == 201
+    assert probed_zone_ids == []
     item = [
-        item for item in resp.json()["data"]["items"] if item["key"] == "email_routing"
+        item
+        for item in resp.json()["data"]["capability_report"]["items"]
+        if item["key"] == "email_routing"
     ][0]
-    assert item["status"] == "failed"
+    assert item["status"] == "passed"
     rows = (await db_session.execute(select(CFAccount))).scalars().all()
-    assert rows == []
+    assert len(rows) == 1
 
 
-async def test_bind_accepts_email_routing_write_for_all_zones(
+async def test_bind_accepts_without_email_routing_write_for_all_zones(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """多个可访问 Zone 全部通过写权限探测时允许绑定。"""
+    """多个可访问 Zone 绑定成功，但不做全域名 Email Routing 探测。"""
     _patch_verify_ok(monkeypatch)
 
     async def _two_zones(
@@ -604,7 +619,7 @@ async def test_bind_accepts_email_routing_write_for_all_zones(
     resp = await _bind(client, token)
     assert resp.status_code == 201
     assert resp.json()["data"]["capability_report"]["zone_count"] == 2
-    assert probed_zone_ids == ["zone-a", "zone-b"]
+    assert probed_zone_ids == []
 
 
 async def test_bind_rejects_missing_destination_address_write(

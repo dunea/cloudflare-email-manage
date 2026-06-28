@@ -41,9 +41,9 @@ TOKEN_SETUP_NOTES = [
         "和 Account API Token (Manage Account → API Tokens)。"
     ),
     "Account API Token 必须同时填写所属 Cloudflare Account ID。",
-    "Cloudflare 权限编辑器需要分别添加「整个账户」和「所有域名」两组策略。",
+    "Cloudflare 权限编辑器需要分别添加「整个账户」和「邮箱域名」两组策略。",
     "整个账户权限只需要 Workers Scripts、Email Routing Addresses、Email Sending 的 Edit。",
-    "所有域名权限需要 Zone 的 Read，以及 Zone Settings、Email Routing Rules 的 Edit。",
+    "邮箱域名权限需要 Zone 的 Read，以及 Zone Settings、Email Routing Rules 的 Edit。",
     "Workers Routes、Cloud Email Security、Email Routing Suppressions 当前不是必需权限。",
     "Token 资源范围必须覆盖要接入的 Account 和至少一个 Zone。",
     "API Token 输入框只填写原始 Token，不要包含 Bearer 前缀。",
@@ -91,7 +91,7 @@ def _compact_deploy_error_message(exc: AppException) -> str:
                     )
                 return (
                     "部署 Worker 失败：Token 缺少 Zone Settings 权限。"
-                    "请在 Cloudflare Token 的所有域名权限中添加 Zone Settings: Edit，"
+                    "请在 Cloudflare Token 的邮箱域名权限中添加 Zone Settings: Edit，"
                     "然后重新检查权限。"
                 )
     message = error_message(exc)
@@ -103,7 +103,7 @@ def _compact_deploy_error_message(exc: AppException) -> str:
         if domain:
             return (
                 f"部署 Worker 失败：{domain} 的 Email Routing 设置不可访问。"
-                "请在 Cloudflare Token 的所有域名权限中添加 Zone Settings: Edit，"
+                "请在 Cloudflare Token 的邮箱域名权限中添加 Zone Settings: Edit，"
                 "然后重新检查权限。"
             )
     if "Cloudflare 摘要：" in message:
@@ -295,7 +295,7 @@ async def deploy_worker(
     session: SessionDep,
     account_id: int,
 ) -> Response:
-    """一键部署/更新账号级收件 Worker（含所有域名 catch-all 配置）。"""
+    """一键部署/更新账号级收件 Worker（含邮箱域名 catch-all 配置）。"""
     try:
         account = await cf_account_service.get_cf_account_or_404(
             session, account_id, user
@@ -308,7 +308,8 @@ async def deploy_worker(
         return RedirectResponse(f"/cf-accounts/{account_id}", status_code=303)
     flash(
         request,
-        f"Worker 「{result.worker_name}」已部署/更新（{len(result.domains)} 个域名）",
+        f"Worker 「{result.worker_name}」已部署/更新（{len(result.domains)} 个邮箱域名）。"
+        "以后启用新的邮箱域名后，需要再次一键部署 Worker。",
         "success",
     )
     return RedirectResponse(f"/cf-accounts/{account_id}", status_code=303)
