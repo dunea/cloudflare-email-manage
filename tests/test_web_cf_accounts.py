@@ -8,10 +8,12 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.exceptions import CloudflareError
+from app.exceptions import CFPermissionPrecheckError, CloudflareError
 from app.models import CFAccount
 from app.services.cloudflare import CloudflareClient
 from app.services.crypto import decrypt_token
+from app.web.cf_accounts import _capability_report_from_exception
+from app.web.templating import _format_dt
 
 
 async def _web_login(
@@ -58,7 +60,7 @@ def _patch_verify_ok(monkeypatch: pytest.MonkeyPatch) -> None:
         return []
 
     async def _list_email_sending(
-        self: CloudflareClient, account_id: str
+        self: CloudflareClient, zone_id: str
     ) -> list[dict[str, object]]:
         return []
 
@@ -233,6 +235,66 @@ async def test_edit_cf_account_renames(
     assert resp.status_code == 303
     detail = await client.get(f"/cf-accounts/{account.id}")
     assert "新名称" in detail.text
+
+
+async def test_edit_cf_account_token_failure_rerenders_saved_state(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """编辑页 Token 预检失败时回显数据库旧状态，并展示权限报告。"""
+    _patch_verify_ok(monkeypatch)
+    await _web_login(client)
+    await _bind(client)
+    account = (await db_session.execute(select(CFAccount))).scalar_one()
+
+    async def _workers_forbidden(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        raise CloudflareError("HTTP 403: missing Workers Scripts Write")
+
+    monkeypatch.setattr(
+        CloudflareClient, "probe_worker_scripts_write", _workers_forbidden
+    )
+    resp = await client.post(
+        f"/cf-accounts/{account.id}/edit",
+        data={
+            "name": "错误名称",
+            "api_token": "bad-token",
+        },
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 400
+    assert "Cloudflare API Token 权限预检未通过" in resp.text
+    assert "Workers 脚本" in resp.text
+    assert "主账号" in resp.text
+    assert "错误名称" not in resp.text
+
+    await db_session.refresh(account)
+    assert account.name == "主账号"
+    assert account.is_active is True
+    assert account.account_id == "acc-1"
+    assert decrypt_token(account.encrypted_api_token) == "tok"
+
+
+async def test_format_dt_accepts_iso_string() -> None:
+    """模板 dt 过滤器可格式化从 JSON 报告中取出的 ISO 时间字符串。"""
+    assert _format_dt("2026-06-28T13:56:01+00:00") == "2026-06-28 13:56"
+    assert _format_dt("2026-06-28T13:56:01Z") == "2026-06-28 13:56"
+
+
+def test_capability_report_from_exception_accepts_dict_report() -> None:
+    """权限预检异常携带 dict 报告时，Web 层可直接回显。"""
+    report: dict[str, object] = {"overall_status": "failed", "items": []}
+    exc = CFPermissionPrecheckError("权限预检失败", report=report)
+
+    assert _capability_report_from_exception(exc) == report
+
+
+def test_capability_report_from_exception_rejects_non_dict_report() -> None:
+    """异常报告不是 dict 或 Pydantic model 时，不应导致页面 500。"""
+    exc = CFPermissionPrecheckError("权限预检失败", report=["not", "dict"])
+
+    assert _capability_report_from_exception(exc) == {}
 
 
 async def test_delete_cf_account(

@@ -104,13 +104,13 @@ async def test_list_worker_scripts_uses_account_endpoint() -> None:
 
 
 async def test_probe_worker_scripts_write_accepts_validation_error() -> None:
-    """写权限探测遇到非权限类校验错误时视为通过。"""
+    """写权限探测用合法 secret body；脚本不存在时视为已通过鉴权。"""
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["method"] = request.method
         captured["url"] = str(request.url)
-        captured["body"] = request.content
+        captured["body"] = json.loads(request.content)
         return httpx.Response(
             400,
             json={
@@ -125,11 +125,22 @@ async def test_probe_worker_scripts_write_accepts_validation_error() -> None:
     assert captured["method"] == "PUT"
     url = captured["url"]
     assert isinstance(url, str)
-    assert url.endswith(
-        "/accounts/acc1/workers/scripts/"
-        "cf-email-manager-permission-probe-never-create/secrets"
+    script_prefix = (
+        "https://api.cloudflare.com/client/v4/accounts/acc1/workers/scripts/"
+        "cf-email-manager-permission-probe-"
     )
-    assert captured["body"] == b"{}"
+    assert url.startswith(script_prefix)
+    assert url.endswith("/secrets")
+    script_name = url.rsplit("/workers/scripts/", 1)[1].removesuffix("/secrets")
+    assert script_name != "cf-email-manager-permission-probe-never-create"
+    hex_suffix = script_name.removeprefix("cf-email-manager-permission-probe-")
+    assert len(hex_suffix) == 32
+    int(hex_suffix, 16)
+    assert captured["body"] == {
+        "name": "CF_EMAIL_MANAGER_PERMISSION_PROBE",
+        "text": "probe",
+        "type": "secret_text",
+    }
 
 
 async def test_probe_worker_scripts_write_permission_error_raises() -> None:
@@ -164,6 +175,48 @@ async def test_probe_worker_scripts_write_accepts_script_not_found_404() -> None
     cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
     result = await cf.probe_worker_scripts_write("acc1")
     assert result["status"] == "ok"
+
+
+async def test_probe_worker_scripts_write_accepts_not_found_variants() -> None:
+    """Workers 写探测兼容 Cloudflare 脚本不存在响应变体。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={
+                "success": False,
+                "errors": [
+                    {"code": "script_not_found", "message": "Worker does not exist"}
+                ],
+            },
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    result = await cf.probe_worker_scripts_write("acc1")
+    assert result["status"] == "ok"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"code": "not_found", "message": "resource not found"},
+        {"code": 10021, "message": "resource does not exist"},
+    ],
+)
+async def test_probe_worker_scripts_write_rejects_generic_not_found(
+    error: dict[str, object],
+) -> None:
+    """泛化 not found 不能被误判为 Workers 脚本写权限已通过。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={"success": False, "errors": [error]},
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    with pytest.raises(CloudflareError, match="暂未兼容"):
+        await cf.probe_worker_scripts_write("acc1")
 
 
 @pytest.mark.parametrize("status_code", [429, 500, 503])
@@ -206,13 +259,13 @@ async def test_probe_worker_scripts_write_unexpected_success_raises() -> None:
 
 
 async def test_probe_email_routing_rules_write_uses_invalid_create_payload() -> None:
-    """Email Routing 写探测使用创建规则接口和无效 payload。"""
+    """Email Routing 写探测使用创建规则接口和无副作用非法 action。"""
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["method"] = request.method
         captured["url"] = str(request.url)
-        captured["body"] = request.content
+        captured["body"] = json.loads(request.content)
         return httpx.Response(
             400,
             json={
@@ -233,7 +286,49 @@ async def test_probe_email_routing_rules_write_uses_invalid_create_payload() -> 
     url = captured["url"]
     assert isinstance(url, str)
     assert url.endswith("/zones/zone1/email/routing/rules")
-    assert captured["body"] == b"{}"
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["actions"][0]["type"] == "cf-email-manager-invalid-action"
+    assert body["matchers"][0]["value"].endswith("@example.invalid")
+
+
+async def test_probe_email_routing_rules_write_accepts_422_validation() -> None:
+    """Email Routing 写探测接受 422 validation/source.pointer 响应。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422,
+            json={
+                "success": False,
+                "errors": [
+                    {
+                        "message": "actions.0.type is invalid",
+                        "source": {"pointer": "/actions/0/type"},
+                    }
+                ],
+            },
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    result = await cf.probe_email_routing_rules_write("zone1")
+    assert result["status"] == "ok"
+
+
+async def test_probe_email_routing_rules_write_permission_error_raises() -> None:
+    """Email Routing 写探测遇到认证或权限错误时失败。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "success": False,
+                "errors": [{"code": 10000, "message": "Authentication error"}],
+            },
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    with pytest.raises(CloudflareError, match="权限不足"):
+        await cf.probe_email_routing_rules_write("zone1")
 
 
 async def test_probe_destination_addresses_write_uses_invalid_create_payload() -> None:
@@ -243,12 +338,12 @@ async def test_probe_destination_addresses_write_uses_invalid_create_payload() -
     def handler(request: httpx.Request) -> httpx.Response:
         captured["method"] = request.method
         captured["url"] = str(request.url)
-        captured["body"] = request.content
+        captured["body"] = json.loads(request.content)
         return httpx.Response(
-            400,
+            422,
             json={
                 "success": False,
-                "errors": [{"message": "email is required"}],
+                "errors": [{"message": "email is invalid"}],
             },
         )
 
@@ -259,7 +354,24 @@ async def test_probe_destination_addresses_write_uses_invalid_create_payload() -
     url = captured["url"]
     assert isinstance(url, str)
     assert url.endswith("/accounts/acc1/email/routing/addresses")
-    assert captured["body"] == b"{}"
+    assert captured["body"] == {"email": "not-an-email"}
+
+
+async def test_probe_destination_addresses_write_permission_error_raises() -> None:
+    """目标地址写探测遇到认证或权限错误时失败。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "success": False,
+                "errors": [{"code": 10000, "message": "Authentication error"}],
+            },
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    with pytest.raises(CloudflareError, match="权限不足"):
+        await cf.probe_destination_addresses_write("acc1")
 
 
 async def test_probe_email_sending_write_uses_invalid_send_payload() -> None:
@@ -289,7 +401,7 @@ async def test_probe_email_sending_write_uses_invalid_send_payload() -> None:
 
 
 async def test_set_worker_secret_payload() -> None:
-    """set_worker_secret PUT 标准 JSON，body 含 name/text/type=secret。"""
+    """set_worker_secret PUT 标准 JSON，body 含 name/text/type=secret_text。"""
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -311,7 +423,7 @@ async def test_set_worker_secret_payload() -> None:
     assert isinstance(body, dict)
     assert body["name"] == "WEBHOOK_SECRETS"
     assert body["text"] == '{"a.com":"s1"}'
-    assert body["type"] == "secret"
+    assert body["type"] == "secret_text"
     assert result["name"] == "WEBHOOK_SECRETS"
 
 

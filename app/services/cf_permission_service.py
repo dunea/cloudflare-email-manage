@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from fastapi import status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.exceptions import AppException, CloudflareError
+from app.exceptions import AppException, CFPermissionPrecheckError, CloudflareError
 from app.models import CFAccount
 from app.schemas.cf_account import CFPermissionCheckItem, CFPermissionReport
 from app.services.cloudflare import CloudflareClient
@@ -100,6 +100,7 @@ def _make_item(
     requirement: PermissionRequirement,
     status_value: str,
     message: str,
+    fix_hint: str | None = None,
 ) -> CFPermissionCheckItem:
     """构造单项检查结果。"""
     return CFPermissionCheckItem(
@@ -108,7 +109,7 @@ def _make_item(
         status="passed" if status_value == "passed" else "failed",
         required_permission=requirement.required_permission,
         message=message,
-        fix_hint=requirement.fix_hint,
+        fix_hint=fix_hint or requirement.fix_hint,
     )
 
 
@@ -140,8 +141,15 @@ def _classify_cf_error(exc: CloudflareError) -> str:
         return "Cloudflare 返回非 JSON 响应，暂时无法确认权限，请稍后重试。"
     if "无效探测 payload 返回了成功响应" in raw:
         return "Cloudflare 权限探测结果异常：无效探测请求返回成功，已拒绝绑定。"
-    if "未识别的权限探测结果" in raw:
-        return "Cloudflare 返回未识别的权限探测结果，无法确认写权限完整。"
+    if "应用暂未兼容的探测响应" in raw or "未识别的权限探测结果" in raw:
+        summary = ""
+        if "响应摘要：" in raw:
+            summary = "响应摘要：" + raw.split("响应摘要：", 1)[1]
+        return (
+            "Cloudflare 返回了应用暂未兼容的探测响应，无法确认写权限；"
+            "这不代表 Token 一定缺少权限。请联系管理员升级探测兼容逻辑。"
+            f"{summary}"
+        )
     if "account id 不匹配" in lowered or "account id mismatch" in lowered:
         return (
             "新 Token 属于或覆盖的是另一个 Cloudflare Account；"
@@ -160,6 +168,25 @@ def _classify_cf_error(exc: CloudflareError) -> str:
 def describe_cloudflare_error(exc: CloudflareError) -> str:
     """公开的 Cloudflare 错误说明助手。"""
     return _classify_cf_error(exc)
+
+
+def _fix_hint_for_cloudflare_error(
+    requirement: PermissionRequirement, exc: CloudflareError
+) -> str:
+    """根据 Cloudflare 错误类型选择修复建议，避免把兼容问题误报成缺权限。"""
+    raw = str(exc)
+    if "应用暂未兼容的探测响应" in raw or "未识别的权限探测结果" in raw:
+        return (
+            "这不一定是 Token 权限不足。请联系管理员升级 Cloudflare 权限探测兼容逻辑，"
+            "并附上该检查项的 HTTP status 与 Cloudflare error code/message。"
+        )
+    if "暂时无法完成权限探测" in raw:
+        return "Cloudflare 暂时无法完成权限探测，请稍后重试。"
+    if "返回非 JSON 响应" in raw:
+        return "Cloudflare 返回非 JSON 响应，暂时无法确认权限，请稍后重试。"
+    if "无效探测 payload 返回了成功响应" in raw:
+        return "权限探测请求出现异常成功响应，请联系管理员检查探测 payload。"
+    return requirement.fix_hint
 
 
 def _normalize_token(api_token: str) -> str:
@@ -213,6 +240,8 @@ async def _resolve_zones(
 ) -> tuple[str | None, list[dict[str, object]]]:
     """解析账号 ID 并读取该账号下可访问 Zone。"""
     account_id = explicit_account_id.strip() if explicit_account_id else None
+    if not account_id:
+        account_id = None
     zones = await client.list_zones(account_id)
     if account_id is not None:
         mismatched = _find_mismatched_zone_account_id(zones, account_id)
@@ -238,7 +267,14 @@ async def _add_cloudflare_check(
     try:
         await call()
     except CloudflareError as exc:
-        items.append(_make_item(requirement, "failed", _classify_cf_error(exc)))
+        items.append(
+            _make_item(
+                requirement,
+                "failed",
+                _classify_cf_error(exc),
+                _fix_hint_for_cloudflare_error(requirement, exc),
+            )
+        )
         return
     items.append(_make_item(requirement, "passed", success_message))
 
@@ -257,6 +293,19 @@ async def _check_destination_addresses_write(
     """检查目标地址读可达与写权限。"""
     await client.list_destination_addresses(account_id)
     await client.probe_destination_addresses_write(account_id)
+
+
+async def _check_email_routing_rules_write_for_zones(
+    client: CloudflareClient, zones: list[dict[str, object]]
+) -> None:
+    """检查所有可访问 Zone 的 Email Routing 规则读可达与写权限。"""
+    for zone in zones:
+        zone_id = str(zone.get("id") or "")
+        if not zone_id:
+            raise CloudflareError(
+                "Cloudflare Zone 响应缺少 zone_id，无法确认 Email Routing 权限。"
+            )
+        await _check_email_routing_rules_write(client, zone_id)
 
 
 async def inspect_token_permissions(
@@ -350,13 +399,11 @@ async def inspect_token_permissions(
             f"已读取到 {len(zones)} 个可访问域名。",
         )
     )
-    first_zone_id = str(zones[0].get("id", ""))
-
     await _add_cloudflare_check(
         items,
         EMAIL_ROUTING_REQUIREMENT,
-        lambda: _check_email_routing_rules_write(client, first_zone_id),
-        "已通过 Email Routing 规则读/写权限探测。",
+        lambda: _check_email_routing_rules_write_for_zones(client, zones),
+        f"已通过 {len(zones)} 个域名的 Email Routing 规则读/写权限探测。",
     )
     await _add_cloudflare_check(
         items,
@@ -387,18 +434,16 @@ async def inspect_token_permissions(
 
 
 def ensure_report_passed(report: CFPermissionReport) -> None:
-    """权限报告未通过时抛出带结构化 data 的业务异常。"""
+    """权限报告未通过时抛出专用权限预检异常。"""
     if report.overall_status == "passed":
         return
     failed = [item for item in report.items if item.status == "failed"]
     summary = "；".join(f"{item.label}: {item.message}" for item in failed[:3])
     if len(failed) > 3:
         summary += f"；另有 {len(failed) - 3} 项未通过"
-    raise AppException(
+    raise CFPermissionPrecheckError(
         f"Cloudflare API Token 权限预检未通过：{summary}",
-        code=1403,
-        http_status=status.HTTP_403_FORBIDDEN,
-        data=report.model_dump(mode="json"),
+        report=report,
     )
 
 

@@ -19,12 +19,15 @@ _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 
-def _format_dt(value: datetime | None) -> str:
+def _format_dt(value: datetime | str | None) -> str:
     """模板过滤器 dt：将 datetime 格式化为 YYYY-MM-DD HH:MM。"""
     if value is None:
         return ""
     if isinstance(value, str):
-        return value
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return value
     return value.strftime("%Y-%m-%d %H:%M")
 
 

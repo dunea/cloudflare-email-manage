@@ -4,8 +4,11 @@
 """
 
 from fastapi import APIRouter, Query, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 
 from app.dependencies import CurrentUser, SessionDep
+from app.exceptions import CFPermissionPrecheckError
 from app.schemas.cf_account import (
     CFAccountCreate,
     CFAccountRead,
@@ -24,6 +27,18 @@ from app.services import (
 )
 
 router = APIRouter(prefix="/cf-accounts", tags=["CF账号"])
+
+
+def _permission_precheck_response(exc: CFPermissionPrecheckError) -> JSONResponse:
+    """构造 CF 账号权限预检失败响应，保留结构化检查报告。"""
+    return JSONResponse(
+        status_code=exc.http_status,
+        content={
+            "code": exc.code,
+            "data": jsonable_encoder(exc.report),
+            "message": exc.message,
+        },
+    )
 
 
 @router.post(
@@ -50,9 +65,14 @@ async def check_token_permissions(
 )
 async def bind_cf_account(
     data: CFAccountCreate, current_user: CurrentUser, session: SessionDep
-) -> ApiResponse[CFAccountRead]:
+) -> ApiResponse[CFAccountRead] | JSONResponse:
     """校验 API Token 后加密绑定 CF 账号。"""
-    cf_account = await cf_account_service.bind_cf_account(session, current_user, data)
+    try:
+        cf_account = await cf_account_service.bind_cf_account(
+            session, current_user, data
+        )
+    except CFPermissionPrecheckError as exc:
+        return _permission_precheck_response(exc)
     return ApiResponse(data=CFAccountRead.model_validate(cf_account))
 
 
@@ -105,12 +125,15 @@ async def update_cf_account(
     data: CFAccountUpdate,
     current_user: CurrentUser,
     session: SessionDep,
-) -> ApiResponse[CFAccountRead]:
+) -> ApiResponse[CFAccountRead] | JSONResponse:
     """更新 CF 账号信息（可更换 Token）。"""
     cf_account = await cf_account_service.get_cf_account_or_404(
         session, account_id, current_user
     )
-    updated = await cf_account_service.update_cf_account(session, cf_account, data)
+    try:
+        updated = await cf_account_service.update_cf_account(session, cf_account, data)
+    except CFPermissionPrecheckError as exc:
+        return _permission_precheck_response(exc)
     return ApiResponse(data=CFAccountRead.model_validate(updated))
 
 
@@ -177,7 +200,7 @@ async def sync_domains(
 )
 async def deploy_worker(
     account_id: int, current_user: CurrentUser, session: SessionDep
-) -> ApiResponse[WorkerDeployResult]:
+) -> ApiResponse[WorkerDeployResult] | JSONResponse:
     """为该 CF 账号部署/更新账号级收件 Worker，并配置所有域名的 catch-all。
 
     流程：启用 Email Routing → 上传 Worker 脚本 → 设置域名→密钥 secret →
@@ -187,5 +210,10 @@ async def deploy_worker(
     cf_account = await cf_account_service.get_cf_account_or_404(
         session, account_id, current_user
     )
-    result = await worker_deploy_service.deploy_worker_for_account(session, cf_account)
+    try:
+        result = await worker_deploy_service.deploy_worker_for_account(
+            session, cf_account
+        )
+    except CFPermissionPrecheckError as exc:
+        return _permission_precheck_response(exc)
     return ApiResponse(data=result)
