@@ -402,6 +402,15 @@ class CloudflareClient:
         result = await self._request("GET", "/user/tokens/verify")
         return result if isinstance(result, dict) else {}
 
+    async def verify_account_token(self, account_id: str) -> dict[str, Any]:
+        """校验 Account API Token 有效性。"""
+        if settings.CF_FAKE_MODE:
+            return {"status": "active"}
+        result = await self._request(
+            "GET", f"/accounts/{account_id}/tokens/verify"
+        )
+        return result if isinstance(result, dict) else {}
+
     # ---- Account（账户）----
 
     async def list_accounts(self) -> list[dict[str, Any]]:

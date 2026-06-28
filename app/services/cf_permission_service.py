@@ -43,8 +43,11 @@ class TokenPermissionCheckResult:
 TOKEN_REQUIREMENT = PermissionRequirement(
     key="token_auth",
     label="API Token 有效性",
-    required_permission="有效的 Cloudflare API Token",
-    fix_hint="请重新复制 Cloudflare API Token 原始值；不要包含 Bearer 前缀。",
+    required_permission="有效的 Cloudflare User API Token 或 Account API Token",
+    fix_hint=(
+        "请重新复制 Cloudflare API Token 原始值；不要包含 Bearer 前缀。"
+        "如果使用 Account API Token，请同时填写 Account ID。"
+    ),
 )
 
 ZONE_REQUIREMENT = PermissionRequirement(
@@ -234,6 +237,63 @@ def _normalize_token(api_token: str) -> str:
     return token
 
 
+def _clean_account_id(account_id: str | None) -> str | None:
+    """规范化可选 Account ID。"""
+    value = account_id.strip() if account_id else None
+    return value or None
+
+
+def _is_account_api_token(api_token: str) -> bool:
+    """是否为 Cloudflare Account API Token。"""
+    return api_token.startswith("cfat_")
+
+
+def _is_user_api_token(api_token: str) -> bool:
+    """是否为 Cloudflare User API Token。"""
+    return api_token.startswith("cfut_")
+
+
+def _is_token_auth_failure(exc: CloudflareError) -> bool:
+    """判断 User Token 校验失败是否适合回退到 Account Token 校验。"""
+    raw = str(exc)
+    lowered = raw.lower()
+    return (
+        exc.cf_status_code in {401, 403}
+        or "10000" in raw
+        or "authentication error" in lowered
+        or "unauthorized" in lowered
+        or "invalid token" in lowered
+    )
+
+
+async def _verify_token_identity(
+    client: CloudflareClient, api_token: str, account_id: str | None
+) -> str:
+    """校验 Token 身份，并返回实际使用的 Token 类型。"""
+    if _is_account_api_token(api_token):
+        if account_id is None:
+            raise AppException(
+                "Account API Token（cfat_ 前缀）必须填写 Cloudflare Account ID。",
+                code=1400,
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+        await client.verify_account_token(account_id)
+        return "account"
+
+    try:
+        await client.verify_token()
+        return "user"
+    except CloudflareError as exc:
+        if (
+            account_id is not None
+            and not _is_user_api_token(api_token)
+            and _is_token_auth_failure(exc)
+        ):
+            await client.verify_account_token(account_id)
+            return "account"
+        raise
+
+
 async def _first_account_id(client: CloudflareClient) -> str | None:
     """从账号列表中提取第一个 account_id。"""
     accounts = await client.list_accounts()
@@ -359,19 +419,20 @@ async def inspect_token_permissions(
 ) -> TokenPermissionCheckResult:
     """检查一个未入库 Token 的核心权限，返回结构化报告。"""
     checked_at = _now()
+    requested_account_id = _clean_account_id(account_id)
     try:
         normalized_token = _normalize_token(api_token)
     except AppException as exc:
         item = _make_item(TOKEN_REQUIREMENT, "failed", exc.message)
         report = _report(
             checked_at=checked_at,
-            account_id=account_id,
+            account_id=requested_account_id,
             zone_count=0,
             items=[item],
         )
         return TokenPermissionCheckResult(
             api_token=api_token.strip(),
-            account_id=account_id,
+            account_id=requested_account_id,
             report=report,
         )
 
@@ -379,30 +440,55 @@ async def inspect_token_permissions(
     items: list[CFPermissionCheckItem] = []
 
     try:
-        await client.verify_token()
+        token_kind = await _verify_token_identity(
+            client, normalized_token, requested_account_id
+        )
     except CloudflareError as exc:
         items.append(_make_item(TOKEN_REQUIREMENT, "failed", _classify_cf_error(exc)))
         report = _report(
             checked_at=checked_at,
-            account_id=account_id,
+            account_id=requested_account_id,
             zone_count=0,
             items=items,
         )
-        return TokenPermissionCheckResult(normalized_token, account_id, report)
+        return TokenPermissionCheckResult(normalized_token, requested_account_id, report)
+    except AppException as exc:
+        items.append(
+            _make_item(
+                TOKEN_REQUIREMENT,
+                "failed",
+                exc.message,
+                "请在绑定表单填写该 Token 所属的 Cloudflare Account ID。",
+            )
+        )
+        report = _report(
+            checked_at=checked_at,
+            account_id=requested_account_id,
+            zone_count=0,
+            items=items,
+        )
+        return TokenPermissionCheckResult(
+            normalized_token, requested_account_id, report
+        )
 
-    items.append(_make_item(TOKEN_REQUIREMENT, "passed", "Token 已通过 Cloudflare 校验。"))
+    verify_message = (
+        "Account API Token 已通过 Cloudflare 校验。"
+        if token_kind == "account"
+        else "User API Token 已通过 Cloudflare 校验。"
+    )
+    items.append(_make_item(TOKEN_REQUIREMENT, "passed", verify_message))
 
     try:
-        resolved_account_id, zones = await _resolve_zones(client, account_id)
+        resolved_account_id, zones = await _resolve_zones(client, requested_account_id)
     except CloudflareError as exc:
         items.append(_make_item(ZONE_REQUIREMENT, "failed", _classify_cf_error(exc)))
         report = _report(
             checked_at=checked_at,
-            account_id=account_id,
+            account_id=requested_account_id,
             zone_count=0,
             items=items,
         )
-        return TokenPermissionCheckResult(normalized_token, account_id, report)
+        return TokenPermissionCheckResult(normalized_token, requested_account_id, report)
 
     if not zones:
         message = (
@@ -418,7 +504,7 @@ async def inspect_token_permissions(
         )
         return TokenPermissionCheckResult(
             normalized_token,
-            resolved_account_id or account_id,
+            resolved_account_id or requested_account_id,
             report,
         )
 

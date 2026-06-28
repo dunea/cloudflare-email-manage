@@ -209,8 +209,10 @@ JSON API 统一前缀为 `/api/v1`，响应格式：
 
 ## Cloudflare API Token 权限
 
-创建 Cloudflare API Token 时必须授予以下核心权限。绑定账号时系统会执行权限预检，
-缺少任一核心权限都会拒绝绑定，并返回具体失败项和修复建议。
+创建 Cloudflare API Token 时必须授予以下核心权限。绑定账号时系统会执行权限预检：
+User API Token 使用 `GET /user/tokens/verify` 校验，Account API Token 使用
+`GET /accounts/{account_id}/tokens/verify` 校验。缺少任一核心权限都会拒绝绑定，
+并返回具体失败项和修复建议。
 
 | 权限 | 用途 |
 |------|------|
@@ -222,6 +224,9 @@ JSON API 统一前缀为 `/api/v1`，响应格式：
 
 Token 设置注意事项：
 
+- 支持 User API Token 和 Account API Token：
+  - User API Token 在 Cloudflare 控制台 `My Profile` → `API Tokens` 创建。
+  - Account API Token 在 `Manage Account` → `API Tokens` 创建，绑定时必须填写所属 Account ID。
 - 资源范围必须覆盖要接入的 Account 和至少一个 Zone。
 - API Token 输入框只填写原始 Token，不要包含 `Bearer` 前缀。
 - 如果 Token 配置了来源 IP 限制，请放行本服务的公网出口 IP。
