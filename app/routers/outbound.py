@@ -6,7 +6,7 @@
 
 from fastapi import APIRouter
 
-from app.dependencies import RequestUser, SessionDep
+from app.dependencies import RequestUserSend, SessionDep
 from app.schemas.common import ApiResponse
 from app.schemas.outbound import SendEmailRequest, SendEmailResult
 from app.services import outbound_service
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/outbound", tags=["发件"])
     summary="发送邮件（CF Email Sending Beta）",
 )
 async def send_email(
-    data: SendEmailRequest, current_user: RequestUser, session: SessionDep
+    data: SendEmailRequest, current_user: RequestUserSend, session: SessionDep
 ) -> ApiResponse[SendEmailResult]:
     """从平台内已管理的邮箱地址发送邮件。"""
     result = await outbound_service.send_email(session, current_user, data)

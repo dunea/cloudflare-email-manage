@@ -16,14 +16,17 @@ import app.models  # noqa: F401
 from app.database import Base, get_session
 from app.main import app
 from app.services.cloudflare import _reset_fake_destination_addresses
+from app.services.rate_limit import reset_rate_limits
 
 
 @pytest.fixture(autouse=True)
 def reset_fake_cloudflare_state() -> Iterator[None]:
     """每个测试前后清理假 CF 内存状态。"""
     _reset_fake_destination_addresses()
+    reset_rate_limits()
     yield
     _reset_fake_destination_addresses()
+    reset_rate_limits()
 
 
 @pytest_asyncio.fixture

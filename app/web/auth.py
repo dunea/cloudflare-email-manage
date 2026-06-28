@@ -9,10 +9,12 @@ from fastapi import APIRouter, Form, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import ValidationError
 
+from app.config import settings
 from app.dependencies import SessionDep
 from app.exceptions import AppException
 from app.schemas.user import UserCreate
 from app.services import auth_service
+from app.services.rate_limit import client_ip, hit, reset
 from app.web.deps import OptionalWebUser, clear_auth_cookies, set_auth_cookies
 from app.web.templating import error_message, flash, render
 
@@ -47,9 +49,25 @@ async def login_submit(
     next_url: Annotated[str, Form(alias="next")] = "/dashboard",
 ) -> Response:
     """处理登录表单：校验凭证后下发 Cookie 并跳转。"""
+    bucket_key = f"{client_ip(request)}:{username.lower()}"
     try:
         user = await auth_service.authenticate_user(session, username, password)
     except AppException as exc:
+        try:
+            hit(
+                "login",
+                bucket_key,
+                settings.LOGIN_RATE_LIMIT_ATTEMPTS,
+                settings.LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+            )
+        except AppException as rate_exc:
+            flash(request, rate_exc.message, "error")
+            return render(
+                request,
+                "auth/login.html",
+                status_code=rate_exc.http_status,
+                form={"username": username, "next": _safe_next(next_url)},
+            )
         flash(request, exc.message, "error")
         return render(
             request,
@@ -58,6 +76,7 @@ async def login_submit(
             form={"username": username, "next": _safe_next(next_url)},
         )
 
+    reset("login", bucket_key)
     tokens = auth_service.issue_tokens(user)
     response = RedirectResponse(_safe_next(next_url), status_code=303)
     set_auth_cookies(response, tokens.access_token, tokens.refresh_token)

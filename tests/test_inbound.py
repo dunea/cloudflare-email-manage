@@ -49,6 +49,19 @@ def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+async def _create_key(
+    client: AsyncClient, token: str, scopes: list[str]
+) -> str:
+    """创建指定 scopes 的 API Key，返回原始 key。"""
+    resp = await client.post(
+        "/api/v1/api-keys",
+        headers=_auth(token),
+        json={"name": "prog", "scopes": scopes},
+    )
+    assert resp.status_code == 201
+    return resp.json()["data"]["key"]
+
+
 def _sign(body: bytes) -> str:
     """对请求体计算 HMAC-SHA256 签名（与服务端一致）。"""
     return hmac.new(
@@ -193,6 +206,28 @@ async def test_webhook_invalid_payload(client: AsyncClient) -> None:
     assert resp.status_code == 422
 
 
+async def test_webhook_rejects_oversized_payload(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Webhook body 超过配置上限返回 413，且不入库。"""
+    monkeypatch.setattr(settings, "WEBHOOK_MAX_BYTES", 16)
+    body = b'{"to":"hello@example.com","text":"' + (b"x" * 32) + b'"}'
+
+    resp = await client.post(
+        "/api/v1/inbound/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Webhook-Signature": _sign(body),
+        },
+    )
+    assert resp.status_code == 413
+    rows = (await db_session.execute(select(InboundEmail))).scalars().all()
+    assert rows == []
+
+
 # ---- 查询与隔离 ----
 
 
@@ -239,6 +274,56 @@ async def test_get_inbound_email(
     resp = await client.get(f"/api/v1/inbound/{email_id}", headers=_auth(token))
     assert resp.status_code == 200
     assert resp.json()["data"]["id"] == email_id
+
+
+async def test_read_inbound_via_api_key_scope(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """具备 read_inbound scope 的 API Key 可读取收件列表和详情。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    await _setup_email_address(client, token, db_session)
+    webhook = await _post_webhook(
+        client,
+        {"to": "hello@example.com", "from": "x@y.com", "subject": "s", "text": "t"},
+    )
+    raw_key = await _create_key(client, token, ["read_inbound"])
+    headers = {"X-API-Key": raw_key}
+
+    listing = await client.get("/api/v1/inbound", headers=headers)
+    assert listing.status_code == 200
+    assert listing.json()["data"]["total"] == 1
+
+    email_id = webhook.json()["data"]["id"]
+    detail = await client.get(f"/api/v1/inbound/{email_id}", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["data"]["id"] == email_id
+
+
+async def test_read_inbound_via_api_key_requires_scope(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """API Key 缺少 read_inbound scope 时不能读取收件。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    await _setup_email_address(client, token, db_session)
+    webhook = await _post_webhook(
+        client,
+        {"to": "hello@example.com", "from": "x@y.com", "subject": "s", "text": "t"},
+    )
+    raw_key = await _create_key(client, token, ["send"])
+    headers = {"X-API-Key": raw_key}
+
+    listing = await client.get("/api/v1/inbound", headers=headers)
+    assert listing.status_code == 403
+
+    email_id = webhook.json()["data"]["id"]
+    detail = await client.get(f"/api/v1/inbound/{email_id}", headers=headers)
+    assert detail.status_code == 403
 
 
 async def test_get_inbound_isolation(

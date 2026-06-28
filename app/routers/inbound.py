@@ -4,9 +4,11 @@ Webhook 端点不走常规鉴权，改为校验 X-Webhook-Signature 签名；
 查询端点需 JWT 认证并按归属隔离。
 """
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, status
 
-from app.dependencies import CurrentUser, SessionDep
+from app.config import settings
+from app.dependencies import RequestUserReadInbound, SessionDep
+from app.exceptions import AppException
 from app.schemas.common import ApiResponse, PageData
 from app.schemas.inbound_email import InboundEmailRead
 from app.services import inbound_service
@@ -24,6 +26,12 @@ async def receive_webhook(
 ) -> ApiResponse[InboundEmailRead]:
     """接收 CF Worker 转发的邮件：校验签名后入库。"""
     raw_body = await request.body()
+    if len(raw_body) > settings.WEBHOOK_MAX_BYTES:
+        raise AppException(
+            "Webhook 载荷过大",
+            code=1413,
+            http_status=status.HTTP_413_CONTENT_TOO_LARGE,
+        )
     signature = request.headers.get(inbound_service.WEBHOOK_SIGNATURE_HEADER)
     email = await inbound_service.process_webhook(session, raw_body, signature)
     return ApiResponse(data=InboundEmailRead.model_validate(email))
@@ -35,7 +43,7 @@ async def receive_webhook(
     summary="收件列表",
 )
 async def list_inbound_emails(
-    current_user: CurrentUser,
+    current_user: RequestUserReadInbound,
     session: SessionDep,
     page: int = Query(default=1, ge=1),
     size: int = Query(default=20, ge=1, le=100),
@@ -60,7 +68,7 @@ async def list_inbound_emails(
     summary="获取收件邮件",
 )
 async def get_inbound_email(
-    email_id: int, current_user: CurrentUser, session: SessionDep
+    email_id: int, current_user: RequestUserReadInbound, session: SessionDep
 ) -> ApiResponse[InboundEmailRead]:
     """获取指定收件邮件详情。"""
     email = await inbound_service.get_inbound_email_or_404(

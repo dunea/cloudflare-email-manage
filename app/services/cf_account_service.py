@@ -3,15 +3,24 @@
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.exceptions import AppException, NotFoundError
+from app.exceptions import AppException, NotFoundError, PermissionError
 from app.models import CFAccount, User
 from app.schemas.cf_account import CFAccountCreate, CFAccountUpdate
 from app.services.cloudflare import CloudflareClient
 from app.services.crypto import decrypt_token, encrypt_token
 
 
+def ensure_cf_account_usable(cf_account: CFAccount) -> None:
+    """确保 CF 账号未删除且处于启用状态。"""
+    if cf_account.is_deleted:
+        raise NotFoundError("CF 账号不存在")
+    if not cf_account.is_active:
+        raise PermissionError("CF 账号已停用，请启用后重试")
+
+
 def build_client(cf_account: CFAccount) -> CloudflareClient:
     """根据 CF 账号解密 Token 并构造 CloudflareClient。"""
+    ensure_cf_account_usable(cf_account)
     token = decrypt_token(cf_account.encrypted_api_token)
     return CloudflareClient(token)
 

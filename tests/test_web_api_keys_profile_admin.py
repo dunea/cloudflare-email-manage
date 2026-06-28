@@ -7,6 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import APIKey, User
 
 
+def _key_form(name: str = "脚本") -> dict[str, object]:
+    """模拟浏览器默认勾选两个 API Key scope 的表单。"""
+    return {"name": name, "scopes": ["send", "read_inbound"]}
+
+
 async def _web_login(
     client: AsyncClient,
     username: str = "alice",
@@ -38,7 +43,7 @@ async def test_api_keys_requires_auth(client: AsyncClient) -> None:
 async def test_create_api_key_shows_once(client: AsyncClient) -> None:
     await _web_login(client)
     resp = await client.post(
-        "/api-keys", data={"name": "脚本"}, follow_redirects=False
+        "/api-keys", data=_key_form(), follow_redirects=False
     )
     assert resp.status_code == 303
 
@@ -50,11 +55,27 @@ async def test_create_api_key_shows_once(client: AsyncClient) -> None:
     assert "cfem_" not in second.text
 
 
+async def test_create_api_key_rejects_empty_scopes(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Web 表单显式无 scope 时不创建默认全权限 API Key。"""
+    await _web_login(client)
+    resp = await client.post(
+        "/api-keys", data={"name": "空权限"}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    rows = (await db_session.execute(select(APIKey))).scalars().all()
+    assert rows == []
+
+    listing = await client.get("/api-keys")
+    assert "至少需要一个权限" in listing.text
+
+
 async def test_rename_api_key(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     await _web_login(client)
-    await client.post("/api-keys", data={"name": "旧名"})
+    await client.post("/api-keys", data=_key_form("旧名"))
     key = (await db_session.execute(select(APIKey))).scalar_one()
 
     resp = await client.post(
@@ -69,7 +90,7 @@ async def test_toggle_and_delete_api_key(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     await _web_login(client)
-    await client.post("/api-keys", data={"name": "脚本"})
+    await client.post("/api-keys", data=_key_form())
     key = (await db_session.execute(select(APIKey))).scalar_one()
 
     await client.post(f"/api-keys/{key.id}/toggle", follow_redirects=False)

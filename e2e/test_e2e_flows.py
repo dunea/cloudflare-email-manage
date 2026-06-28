@@ -6,6 +6,9 @@
 CF 调用由 CF_FAKE_MODE 返回内置假数据（见 conftest 环境变量），不发真实请求。
 """
 
+import hashlib
+import hmac
+import json
 import uuid
 
 import pytest
@@ -30,6 +33,72 @@ def _signup_login(page: Page, base_url: str) -> str:
     page.get_by_role("button", name="登录", exact=True).click()
     page.wait_for_url(f"{base_url}/dashboard")
     return username
+
+
+def _bind_sync_create_email(page: Page, base_url: str, local_part: str) -> None:
+    """绑定 CF、同步域名并创建一个邮箱地址。"""
+    page.goto(f"{base_url}/cf-accounts/new")
+    page.fill('input[name="name"]', "E2E账号")
+    page.fill('input[name="account_id"]', "acc-e2e")
+    page.fill('input[name="api_token"]', "tok-e2e")
+    page.get_by_role("button", name="校验并绑定").click()
+    page.wait_for_url(f"{base_url}/cf-accounts")
+    page.get_by_role("link", name="E2E账号").click()
+    page.get_by_role("button", name="同步域名").click()
+    expect(page.locator("body")).to_contain_text("已同步 1 个域名")
+
+    page.goto(f"{base_url}/email-addresses")
+    page.fill('input[name="local_part"]', local_part)
+    page.select_option('form[action="/email-addresses"] select[name="domain_id"]', index=0)
+    page.get_by_role("button", name="创建", exact=True).click()
+    expect(page.locator("body")).to_contain_text(f"{local_part}@e2e.example.com")
+
+
+def _add_destination_and_forwarding(page: Page, base_url: str) -> None:
+    """添加已验证目标地址并创建转发规则。"""
+    page.goto(f"{base_url}/destination-addresses")
+    page.select_option('select[name="cf_account_id"]', index=0)
+    page.fill('input[name="email"]', "dest@example.com")
+    page.get_by_role("button", name="添加").click()
+    expect(page.locator("body")).to_contain_text("已验证")
+
+    page.goto(f"{base_url}/forwarding-rules")
+    page.select_option('select[name="email_address_id"]', index=1)
+    page.select_option('select[name="destination_email"]', "dest@example.com")
+    page.get_by_role("button", name="创建", exact=True).click()
+    expect(page.locator("body")).to_contain_text("dest@example.com")
+
+
+def _post_webhook(page: Page, base_url: str, to_address: str) -> None:
+    """通过 Webhook 写入一封邮件供收件箱 e2e 使用。"""
+    body = json.dumps(
+        {
+            "to": to_address,
+            "from": "sender@example.com",
+            "subject": "移动端主题",
+            "text": "hello",
+        }
+    ).encode("utf-8")
+    signature = hmac.new(
+        b"e2e-webhook-secret", body, hashlib.sha256
+    ).hexdigest()
+    resp = page.request.post(
+        f"{base_url}/api/v1/inbound/webhook",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Webhook-Signature": signature,
+        },
+    )
+    assert resp.status == 200
+
+
+def _assert_no_horizontal_overflow(page: Page) -> None:
+    """断言当前移动端页面没有明显横向溢出。"""
+    page.wait_for_load_state("networkidle")
+    assert page.evaluate(
+        "() => document.documentElement.scrollWidth <= window.innerWidth + 1"
+    )
 
 
 def test_register_login_logout(page: Page, live_server: str) -> None:
@@ -93,6 +162,65 @@ def test_full_cf_flow(page: Page, live_server: str) -> None:
     page.fill('textarea[name="text"]', "正文内容")
     page.get_by_role("button", name="发送邮件").click()
     expect(page.locator("body")).to_contain_text("邮件已发送")
+
+
+def test_pages_use_local_vendor_assets(page: Page, live_server: str) -> None:
+    """页面源码不再引用 Tailwind/Alpine CDN。"""
+    page.goto(f"{live_server}/login")
+    html = page.content()
+    assert "cdn.tailwindcss.com" not in html
+    assert "cdn.jsdelivr.net/npm/alpinejs" not in html
+    assert "/static/vendor/tailwind-play.js" in html
+    assert "/static/vendor/alpine-3.14.1.min.js" in html
+
+
+def test_submit_guard_disables_and_blocks_second_submit(
+    page: Page, live_server: str
+) -> None:
+    """提交保护会禁用按钮并阻止第二次提交。"""
+    _signup_login(page, live_server)
+    page.goto(f"{live_server}/api-keys")
+    page.fill('input[name="name"]', "guard-key")
+    form_selector = 'form[action="/api-keys"]'
+
+    first = page.evaluate(
+        """selector => window.guardFormSubmit(document.querySelector(selector))""",
+        form_selector,
+    )
+    second = page.evaluate(
+        """selector => window.guardFormSubmit(document.querySelector(selector))""",
+        form_selector,
+    )
+
+    assert first is True
+    assert second is False
+    expect(page.get_by_role("button", name="处理中...")).to_be_disabled()
+
+
+def test_mobile_lists_no_horizontal_overflow(page: Page, live_server: str) -> None:
+    """移动端邮箱地址、转发规则、收件箱列表首屏无明显横向溢出。"""
+    local_part = f"m{uuid.uuid4().hex[:6]}"
+    address = f"{local_part}@e2e.example.com"
+    _signup_login(page, live_server)
+    _bind_sync_create_email(page, live_server, local_part)
+    _add_destination_and_forwarding(page, live_server)
+    _post_webhook(page, live_server, address)
+
+    page.set_viewport_size({"width": 390, "height": 844})
+
+    page.goto(f"{live_server}/email-addresses")
+    expect(page.locator("body")).to_contain_text(address)
+    expect(page.get_by_role("button", name="创建", exact=True)).to_be_visible()
+    _assert_no_horizontal_overflow(page)
+
+    page.goto(f"{live_server}/forwarding-rules")
+    expect(page.locator("body")).to_contain_text("dest@example.com")
+    expect(page.get_by_role("button", name="停用").first).to_be_visible()
+    _assert_no_horizontal_overflow(page)
+
+    page.goto(f"{live_server}/inbound")
+    expect(page.locator("body")).to_contain_text("移动端主题")
+    _assert_no_horizontal_overflow(page)
 
 
 def test_nav_submenu(page: Page, live_server: str) -> None:

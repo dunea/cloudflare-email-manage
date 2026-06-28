@@ -75,13 +75,24 @@ async def _setup_domain(
     client: AsyncClient, token: str, monkeypatch: pytest.MonkeyPatch
 ) -> int:
     """绑定并同步出域名，返回第一个域名 id（example.com）。"""
+    _account_id, domain_id = await _setup_domain_with_account(
+        client, token, monkeypatch
+    )
+    return domain_id
+
+
+async def _setup_domain_with_account(
+    client: AsyncClient, token: str, monkeypatch: pytest.MonkeyPatch
+) -> tuple[int, int]:
+    """绑定并同步出域名，返回账号 id 与第一个域名 id（example.com）。"""
     _patch_cf(monkeypatch)
     account_id = await _bind(client, token)
     sync = await client.post(
         f"/api/v1/cf-accounts/{account_id}/sync", headers=_auth(token)
     )
     domains = sync.json()["data"]["domains"]
-    return next(d["id"] for d in domains if d["domain_name"] == "example.com")
+    domain_id = next(d["id"] for d in domains if d["domain_name"] == "example.com")
+    return account_id, domain_id
 
 
 # ---- 创建 ----
@@ -148,6 +159,45 @@ async def test_create_on_inaccessible_domain(
     resp = await client.post(
         "/api/v1/email-addresses",
         headers=_auth(token_b),
+        json={"domain_id": domain_id, "local_part": "hello"},
+    )
+    assert resp.status_code == 404
+
+
+async def test_create_blocked_when_cf_account_inactive(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """停用 CF 账号后，关联域名不能继续创建邮箱地址。"""
+    token = await _register_and_login(client)
+    account_id, domain_id = await _setup_domain_with_account(client, token, monkeypatch)
+    await client.patch(
+        f"/api/v1/cf-accounts/{account_id}",
+        headers=_auth(token),
+        json={"is_active": False},
+    )
+
+    resp = await client.post(
+        "/api/v1/email-addresses",
+        headers=_auth(token),
+        json={"domain_id": domain_id, "local_part": "hello"},
+    )
+    assert resp.status_code == 403
+    assert "已停用" in resp.json()["message"]
+
+
+async def test_create_blocked_when_cf_account_deleted(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """解绑 CF 账号后，关联域名按不可见处理。"""
+    token = await _register_and_login(client)
+    account_id, domain_id = await _setup_domain_with_account(client, token, monkeypatch)
+    await client.delete(f"/api/v1/cf-accounts/{account_id}", headers=_auth(token))
+
+    listing = await client.get("/api/v1/domains", headers=_auth(token))
+    assert listing.json()["data"]["total"] == 0
+    resp = await client.post(
+        "/api/v1/email-addresses",
+        headers=_auth(token),
         json={"domain_id": domain_id, "local_part": "hello"},
     )
     assert resp.status_code == 404

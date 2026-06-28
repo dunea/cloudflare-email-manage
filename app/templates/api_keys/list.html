@@ -30,13 +30,26 @@
 {% endif %}
 
 <form method="post" action="/api-keys"
-      class="mb-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      class="mb-6 grid gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-[minmax(200px,1fr)_auto_auto] md:items-end">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-  <div class="min-w-[200px] flex-1">
+  <div>
     <label class="mb-1 block text-sm font-medium text-slate-700">名称 / 备注</label>
     <input name="name" required maxlength="128" placeholder="例如：自动化脚本"
            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
   </div>
+  <fieldset class="flex flex-wrap gap-3">
+    <legend class="mb-1 w-full text-sm font-medium text-slate-700">权限</legend>
+    <label class="inline-flex items-center gap-2 text-sm text-slate-600">
+      <input type="checkbox" name="scopes" value="send" checked
+             class="h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand" />
+      发件
+    </label>
+    <label class="inline-flex items-center gap-2 text-sm text-slate-600">
+      <input type="checkbox" name="scopes" value="read_inbound" checked
+             class="h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand" />
+      读收件
+    </label>
+  </fieldset>
   <button type="submit" class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">创建 API Key</button>
 </form>
 
@@ -46,6 +59,7 @@
     <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
       <tr>
         <th class="px-4 py-3">名称</th>
+        <th class="px-4 py-3">权限</th>
         <th class="px-4 py-3">最近使用</th>
         <th class="px-4 py-3">状态</th>
         <th class="px-4 py-3">创建时间</th>
@@ -63,6 +77,13 @@
                    class="rounded-lg border border-slate-300 px-2 py-1 text-sm focus:border-brand focus:outline-none" />
             <button type="submit" class="text-sm font-medium text-brand hover:underline">保存</button>
           </form>
+        </td>
+        <td class="px-4 py-3">
+          <div class="flex flex-wrap gap-1.5">
+            {% for scope in k.scopes %}
+            <span class="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{{ "发件" if scope == "send" else "读收件" }}</span>
+            {% endfor %}
+          </div>
         </td>
         <td class="px-4 py-3 text-slate-400">{{ (k.last_used_at | dt) or "从未" }}</td>
         <td class="px-4 py-3">{% if k.is_active %}{{ badge("启用", "green") }}{% else %}{{ badge("停用", "slate") }}{% endif %}</td>

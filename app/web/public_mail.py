@@ -9,17 +9,32 @@
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import PlainTextResponse
 
+from app.config import settings
 from app.dependencies import SessionDep
 from app.exceptions import NotFoundError
 from app.schemas.inbound_email import InboundEmailRead
 from app.services import email_service, inbound_service
+from app.services.rate_limit import client_ip, hit
 from app.web.templating import render, render_error
 
 router = APIRouter(tags=["前端-公开邮件"])
 
 
-async def _resolve_by_token(session: SessionDep, token: str):
+async def _resolve_by_token(request: Request, session: SessionDep, token: str):
     """按令牌解析邮箱；无效则抛 404（不暴露存在性差异）。"""
+    ip = client_ip(request)
+    hit(
+        "public_mail_ip",
+        ip,
+        settings.PUBLIC_MAIL_RATE_LIMIT_ATTEMPTS,
+        settings.PUBLIC_MAIL_RATE_LIMIT_WINDOW_SECONDS,
+    )
+    hit(
+        "public_mail",
+        f"{ip}:{token}",
+        settings.PUBLIC_MAIL_RATE_LIMIT_ATTEMPTS,
+        settings.PUBLIC_MAIL_RATE_LIMIT_WINDOW_SECONDS,
+    )
     address = await email_service.get_email_address_by_token(session, token)
     if address is None:
         raise NotFoundError("链接无效或邮箱不可用")
@@ -30,10 +45,12 @@ async def _resolve_by_token(session: SessionDep, token: str):
 
 
 @router.get("/mail/{token}.txt", response_class=PlainTextResponse)
-async def public_mail_text(token: str, session: SessionDep) -> PlainTextResponse:
+async def public_mail_text(
+    request: Request, token: str, session: SessionDep
+) -> PlainTextResponse:
     """纯文本格式返回邮箱最新一封邮件，便于程序化读取。"""
     try:
-        address, email = await _resolve_by_token(session, token)
+        address, email = await _resolve_by_token(request, session, token)
     except NotFoundError:
         return PlainTextResponse("链接无效或邮箱不可用", status_code=404)
 
@@ -59,7 +76,7 @@ async def public_mail_html(
 ) -> Response:
     """渲染简洁 HTML 页面，供人工在不登录情况下快速查看最新邮件。"""
     try:
-        address, email = await _resolve_by_token(session, token)
+        address, email = await _resolve_by_token(request, session, token)
     except NotFoundError:
         return render_error(request, 404, "链接无效或邮箱不可用")
 

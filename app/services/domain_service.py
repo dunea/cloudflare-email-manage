@@ -67,9 +67,16 @@ async def list_domains_for_user(
     session: AsyncSession, user: User, page: int, size: int
 ) -> tuple[list[Domain], int]:
     """分页查询用户可见域名：管理员见全部，普通用户见自有 + 被共享的。"""
-    base = select(Domain)
+    base = select(Domain).join(CFAccount).where(CFAccount.is_deleted.is_(False))
     if user.role != "admin":
-        own = select(Domain.id).join(CFAccount).where(CFAccount.user_id == user.id)
+        own = (
+            select(Domain.id)
+            .join(CFAccount)
+            .where(
+                CFAccount.user_id == user.id,
+                CFAccount.is_deleted.is_(False),
+            )
+        )
         assigned = select(DomainAssignment.domain_id).where(
             DomainAssignment.user_id == user.id
         )
@@ -91,7 +98,10 @@ async def _user_can_access_domain(
     """判断普通用户是否可访问该域名（自有或被共享）。"""
     cf_account = (
         await session.execute(
-            select(CFAccount).where(CFAccount.id == domain.cf_account_id)
+            select(CFAccount).where(
+                CFAccount.id == domain.cf_account_id,
+                CFAccount.is_deleted.is_(False),
+            )
         )
     ).scalar_one_or_none()
     if cf_account is not None and cf_account.user_id == user.id:
@@ -114,7 +124,10 @@ async def _is_domain_owner(
     """判断用户是否为域名的所有者（域名所属 CF 账号归属该用户）。"""
     cf_account = (
         await session.execute(
-            select(CFAccount).where(CFAccount.id == domain.cf_account_id)
+            select(CFAccount).where(
+                CFAccount.id == domain.cf_account_id,
+                CFAccount.is_deleted.is_(False),
+            )
         )
     ).scalar_one_or_none()
     return cf_account is not None and cf_account.user_id == user.id
@@ -128,6 +141,16 @@ async def get_domain_or_404(
         await session.execute(select(Domain).where(Domain.id == domain_id))
     ).scalar_one_or_none()
     if domain is None:
+        raise NotFoundError("域名不存在")
+    cf_account = (
+        await session.execute(
+            select(CFAccount).where(
+                CFAccount.id == domain.cf_account_id,
+                CFAccount.is_deleted.is_(False),
+            )
+        )
+    ).scalar_one_or_none()
+    if cf_account is None:
         raise NotFoundError("域名不存在")
     if user.role != "admin" and not await _user_can_access_domain(
         session, user, domain
