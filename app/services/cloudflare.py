@@ -116,7 +116,10 @@ class _ProbeDecision:
 _AUTH_OR_PERMISSION_MARKERS = (
     "10000",
     "authentication error",
-    "permission",
+    "permission denied",
+    "missing permission",
+    "insufficient permission",
+    "not have permission",
     "unauthorized",
     "not authorized",
     "forbidden",
@@ -137,13 +140,21 @@ _VALIDATION_MARKERS = (
     "payload",
     "json",
     "malformed",
+    "invalid",
+    "not valid",
+    "unprocessable",
 )
 
 _WORKERS_SCRIPT_NOT_FOUND_MARKERS = (
     "script not found",
+    "script_not_found",
+    "not_found",
     "no such script",
     "could not find script",
     "workers script not found",
+    "worker script not found",
+    "does not exist",
+    "not exist",
 )
 
 
@@ -177,6 +188,34 @@ def _has_error_source_pointer(body: object) -> bool:
     return False
 
 
+def _summarize_probe_body(status_code: int, body: object) -> str:
+    """提取可展示的 Cloudflare 探测响应摘要。"""
+    parts = [f"HTTP {status_code}"]
+    if isinstance(body, dict):
+        errors = body.get("errors")
+        if isinstance(errors, list) and errors:
+            summaries: list[str] = []
+            for error in errors[:3]:
+                if not isinstance(error, dict):
+                    continue
+                fields: list[str] = []
+                code = error.get("code")
+                message = error.get("message")
+                if code is not None:
+                    fields.append(f"code={code}")
+                if message:
+                    fields.append(f"message={message}")
+                if fields:
+                    summaries.append(", ".join(fields))
+            if summaries:
+                parts.append("Cloudflare errors: " + " | ".join(summaries))
+        else:
+            messages = body.get("messages")
+            if isinstance(messages, list) and messages:
+                parts.append(f"Cloudflare messages: {messages[:3]}")
+    return "; ".join(parts)
+
+
 def _classify_write_probe_response(
     status_code: int,
     body: object,
@@ -205,18 +244,20 @@ def _classify_write_probe_response(
             False,
             "Cloudflare 暂时无法完成权限探测，请稍后重试。",
         )
-    if status_code in {400, 404} and not_found_markers and _has_marker(
+    if 400 <= status_code < 500 and not_found_markers and _has_marker(
         text, not_found_markers
     ):
         return _ProbeDecision(True, "已进入写接口资源校验阶段。")
     all_validation_markers = _VALIDATION_MARKERS + validation_markers
-    if status_code == 400 and (
+    if 400 <= status_code < 500 and (
         _has_error_source_pointer(body) or _has_marker(text, all_validation_markers)
     ):
         return _ProbeDecision(True, "已进入写接口参数校验阶段。")
+    summary = _summarize_probe_body(status_code, body)
     return _ProbeDecision(
         False,
-        "Cloudflare 返回未识别的权限探测结果，无法确认写权限完整。",
+        "Cloudflare 返回了应用暂未兼容的探测响应，无法确认写权限；"
+        f"这不代表 Token 一定缺少权限。响应摘要：{summary}",
     )
 
 
@@ -392,9 +433,32 @@ class CloudflareClient:
         return await self._run_invalid_write_probe(
             "POST",
             f"/zones/{zone_id}/email/routing/rules",
-            payload={},
+            payload={
+                "enabled": True,
+                "name": "cf-email-manager-permission-probe-invalid",
+                "matchers": [
+                    {
+                        "type": "literal",
+                        "field": "to",
+                        "value": "cf-email-manager-probe@example.invalid",
+                    }
+                ],
+                "actions": [
+                    {
+                        "type": "cf-email-manager-invalid-action",
+                        "value": ["probe@example.invalid"],
+                    }
+                ],
+            },
             capability_label="Email Routing 规则写",
-            validation_markers=("actions", "matchers", "routing rule", "rule"),
+            validation_markers=(
+                "action",
+                "actions",
+                "matcher",
+                "matchers",
+                "routing rule",
+                "rule",
+            ),
         )
 
     async def create_routing_rule(
@@ -537,9 +601,9 @@ class CloudflareClient:
         return await self._run_invalid_write_probe(
             "POST",
             f"/accounts/{account_id}/email/routing/addresses",
-            payload={},
+            payload={"email": "not-an-email"},
             capability_label="转发目标地址写",
-            validation_markers=("email", "address", "destination"),
+            validation_markers=("email", "address", "destination", "mailbox"),
         )
 
     async def get_destination_address(
@@ -650,7 +714,7 @@ class CloudflareClient:
     async def probe_worker_scripts_write(self, account_id: str) -> dict[str, Any]:
         """探测 Workers Scripts 写权限，不创建或覆盖 Worker。
 
-        使用不存在的脚本名和空 secret payload 调用写接口。具备写权限时，
+        使用不存在的脚本名和合法 secret payload 调用写接口。具备写权限时，
         Cloudflare 会进入资源/参数校验并返回 4xx 校验类错误；缺少权限或
         Token 无效时返回认证/权限错误。未知、限流和服务端错误不会放行。
         """
@@ -661,7 +725,11 @@ class CloudflareClient:
         return await self._run_invalid_write_probe(
             "PUT",
             f"/accounts/{account_id}/workers/scripts/{probe_script}/secrets",
-            payload={},
+            payload={
+                "name": "CF_EMAIL_MANAGER_PERMISSION_PROBE",
+                "text": "probe",
+                "type": "secret_text",
+            },
             capability_label="Cloudflare Workers Scripts 写",
             validation_markers=("secret", "name", "text", "type"),
             not_found_markers=_WORKERS_SCRIPT_NOT_FOUND_MARKERS,
@@ -762,7 +830,7 @@ class CloudflareClient:
     ) -> WorkerSecretResult:
         """为 Worker 设置/更新 secret（PUT .../workers/scripts/{name}/secrets）。
 
-        body: ``{"name": secret_name, "text": secret_value, "type": "secret"}``。
+        body: ``{"name": secret_name, "text": secret_value, "type": "secret_text"}``。
         secret 在 CF 端加密存储，dashboard 不可见。
         """
         if settings.CF_FAKE_MODE:
@@ -770,7 +838,7 @@ class CloudflareClient:
         payload = {
             "name": secret_name,
             "text": secret_value,
-            "type": "secret",
+            "type": "secret_text",
         }
         result = await self._request(
             "PUT",

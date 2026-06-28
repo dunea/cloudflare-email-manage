@@ -100,6 +100,7 @@ def _make_item(
     requirement: PermissionRequirement,
     status_value: str,
     message: str,
+    fix_hint: str | None = None,
 ) -> CFPermissionCheckItem:
     """构造单项检查结果。"""
     return CFPermissionCheckItem(
@@ -108,7 +109,7 @@ def _make_item(
         status="passed" if status_value == "passed" else "failed",
         required_permission=requirement.required_permission,
         message=message,
-        fix_hint=requirement.fix_hint,
+        fix_hint=fix_hint or requirement.fix_hint,
     )
 
 
@@ -140,8 +141,15 @@ def _classify_cf_error(exc: CloudflareError) -> str:
         return "Cloudflare 返回非 JSON 响应，暂时无法确认权限，请稍后重试。"
     if "无效探测 payload 返回了成功响应" in raw:
         return "Cloudflare 权限探测结果异常：无效探测请求返回成功，已拒绝绑定。"
-    if "未识别的权限探测结果" in raw:
-        return "Cloudflare 返回未识别的权限探测结果，无法确认写权限完整。"
+    if "应用暂未兼容的探测响应" in raw or "未识别的权限探测结果" in raw:
+        summary = ""
+        if "响应摘要：" in raw:
+            summary = "响应摘要：" + raw.split("响应摘要：", 1)[1]
+        return (
+            "Cloudflare 返回了应用暂未兼容的探测响应，无法确认写权限；"
+            "这不代表 Token 一定缺少权限。请联系管理员升级探测兼容逻辑。"
+            f"{summary}"
+        )
     if "account id 不匹配" in lowered or "account id mismatch" in lowered:
         return (
             "新 Token 属于或覆盖的是另一个 Cloudflare Account；"
@@ -160,6 +168,25 @@ def _classify_cf_error(exc: CloudflareError) -> str:
 def describe_cloudflare_error(exc: CloudflareError) -> str:
     """公开的 Cloudflare 错误说明助手。"""
     return _classify_cf_error(exc)
+
+
+def _fix_hint_for_cloudflare_error(
+    requirement: PermissionRequirement, exc: CloudflareError
+) -> str:
+    """根据 Cloudflare 错误类型选择修复建议，避免把兼容问题误报成缺权限。"""
+    raw = str(exc)
+    if "应用暂未兼容的探测响应" in raw or "未识别的权限探测结果" in raw:
+        return (
+            "这不一定是 Token 权限不足。请联系管理员升级 Cloudflare 权限探测兼容逻辑，"
+            "并附上该检查项的 HTTP status 与 Cloudflare error code/message。"
+        )
+    if "暂时无法完成权限探测" in raw:
+        return "Cloudflare 暂时无法完成权限探测，请稍后重试。"
+    if "返回非 JSON 响应" in raw:
+        return "Cloudflare 返回非 JSON 响应，暂时无法确认权限，请稍后重试。"
+    if "无效探测 payload 返回了成功响应" in raw:
+        return "权限探测请求出现异常成功响应，请联系管理员检查探测 payload。"
+    return requirement.fix_hint
 
 
 def _normalize_token(api_token: str) -> str:
@@ -240,7 +267,14 @@ async def _add_cloudflare_check(
     try:
         await call()
     except CloudflareError as exc:
-        items.append(_make_item(requirement, "failed", _classify_cf_error(exc)))
+        items.append(
+            _make_item(
+                requirement,
+                "failed",
+                _classify_cf_error(exc),
+                _fix_hint_for_cloudflare_error(requirement, exc),
+            )
+        )
         return
     items.append(_make_item(requirement, "passed", success_message))
 
