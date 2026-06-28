@@ -522,10 +522,10 @@ async def test_get_email_routing_status() -> None:
 
 
 async def test_enable_email_routing() -> None:
-    """enable_email_routing 调用 .../email/routing/enable。"""
+    """enable_email_routing 调用当前 Email Routing DNS 启用接口。"""
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path.endswith("/zones/z1/email/routing/enable")
+        assert request.url.path.endswith("/zones/z1/email/routing/dns")
         assert request.method == "POST"
         return httpx.Response(
             200, json={"success": True, "result": {"enabled": True}}

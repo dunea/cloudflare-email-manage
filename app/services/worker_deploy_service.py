@@ -97,11 +97,18 @@ def _raise_deploy_cloudflare_error(
     user_hint = cf_permission_service.describe_cloudflare_error(exc)
     error_is_permission = _is_auth_or_permission_error(exc)
     permission_hint = ""
-    if error_is_permission and ("Worker 脚本" in stage or "Worker Secret" in stage):
-        permission_hint = (
-            " 请确认 Token 具备 Account:Workers Scripts:Edit / "
-            "Workers Scripts Write，并重新检查权限。"
-        )
+    if error_is_permission:
+        if "Email Routing" in stage:
+            permission_hint = (
+                " 请确认 Token 在所有域名或指定域名权限中具备 "
+                "Zone Settings:Edit / Zone Settings Write，"
+                "并且资源范围覆盖该域名。"
+            )
+        elif "Worker 脚本" in stage or "Worker Secret" in stage:
+            permission_hint = (
+                " 请确认 Token 具备 Account:Workers Scripts:Edit / "
+                "Workers Scripts Write，并重新检查权限。"
+            )
     raise AppException(
         f"部署 Worker 失败：{stage}。{user_hint}{permission_hint} "
         f"Cloudflare 摘要：{exc}",

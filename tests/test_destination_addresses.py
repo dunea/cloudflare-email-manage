@@ -96,6 +96,11 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> _CFCalls:
         calls.deleted_rules.append((zone_id, rule_id))
         return {"id": rule_id}
 
+    async def _fake_get_email_routing_status(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, object]:
+        return {"enabled": True, "status": "ready"}
+
     async def _fake_list_email_sending(
         self: CloudflareClient, zone_id: str
     ) -> list[dict[str, Any]]:
@@ -135,6 +140,9 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> _CFCalls:
     )
     monkeypatch.setattr(CloudflareClient, "create_routing_rule", _fake_create_rule)
     monkeypatch.setattr(CloudflareClient, "delete_routing_rule", _fake_delete_rule)
+    monkeypatch.setattr(
+        CloudflareClient, "get_email_routing_status", _fake_get_email_routing_status
+    )
     monkeypatch.setattr(
         CloudflareClient, "list_email_sending_subdomains", _fake_list_email_sending
     )

@@ -77,6 +77,11 @@ def _patch_verify_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     ) -> list[dict[str, object]]:
         return []
 
+    async def _fake_get_email_routing_status(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, object]:
+        return {"enabled": True, "status": "ready"}
+
     async def _fake_list_email_sending(
         self: CloudflareClient, zone_id: str
     ) -> list[dict[str, object]]:
@@ -108,6 +113,9 @@ def _patch_verify_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(CloudflareClient, "list_routing_rules", _fake_list_routing_rules)
     monkeypatch.setattr(
         CloudflareClient, "list_destination_addresses", _fake_list_destinations
+    )
+    monkeypatch.setattr(
+        CloudflareClient, "get_email_routing_status", _fake_get_email_routing_status
     )
     monkeypatch.setattr(
         CloudflareClient, "list_email_sending_subdomains", _fake_list_email_sending
@@ -328,6 +336,45 @@ async def test_bind_rejects_missing_email_routing_write(
     ][0]
     assert item["status"] == "failed"
     assert "Email Routing" in item["required_permission"]
+    rows = (await db_session.execute(select(CFAccount))).scalars().all()
+    assert rows == []
+
+
+async def test_bind_rejects_missing_email_routing_settings_permission(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """缺少 Zone Settings 时，部署前必需的 Email Routing 设置检查失败。"""
+    _patch_verify_ok(monkeypatch)
+
+    async def _routing_settings_forbidden(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, object]:
+        raise CloudflareError(
+            "Cloudflare API 返回失败 (HTTP 403; GET "
+            f"/zones/{zone_id}/email/routing): "
+            "[{'code': 10000, 'message': 'Authentication error'}]",
+            cf_method="GET",
+            cf_path=f"/zones/{zone_id}/email/routing",
+            cf_status_code=403,
+            cf_errors=[{"code": 10000, "message": "Authentication error"}],
+        )
+
+    monkeypatch.setattr(
+        CloudflareClient, "get_email_routing_status", _routing_settings_forbidden
+    )
+
+    token = await _register_and_login(client)
+    resp = await _bind(client, token)
+    assert resp.status_code == 403
+    item = [
+        item
+        for item in resp.json()["data"]["items"]
+        if item["key"] == "email_routing_settings"
+    ][0]
+    assert item["status"] == "failed"
+    assert "Zone Settings" in item["required_permission"]
+    assert "Zone Settings" in item["message"]
+    assert "Zone Settings" in item["fix_hint"]
     rows = (await db_session.execute(select(CFAccount))).scalars().all()
     assert rows == []
 
