@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from fastapi import status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.exceptions import AppException, CloudflareError
+from app.exceptions import AppException, CFPermissionPrecheckError, CloudflareError
 from app.models import CFAccount
 from app.schemas.cf_account import CFPermissionCheckItem, CFPermissionReport
 from app.services.cloudflare import CloudflareClient
@@ -213,6 +213,8 @@ async def _resolve_zones(
 ) -> tuple[str | None, list[dict[str, object]]]:
     """解析账号 ID 并读取该账号下可访问 Zone。"""
     account_id = explicit_account_id.strip() if explicit_account_id else None
+    if not account_id:
+        account_id = None
     zones = await client.list_zones(account_id)
     if account_id is not None:
         mismatched = _find_mismatched_zone_account_id(zones, account_id)
@@ -257,6 +259,19 @@ async def _check_destination_addresses_write(
     """检查目标地址读可达与写权限。"""
     await client.list_destination_addresses(account_id)
     await client.probe_destination_addresses_write(account_id)
+
+
+async def _check_email_routing_rules_write_for_zones(
+    client: CloudflareClient, zones: list[dict[str, object]]
+) -> None:
+    """检查所有可访问 Zone 的 Email Routing 规则读可达与写权限。"""
+    for zone in zones:
+        zone_id = str(zone.get("id") or "")
+        if not zone_id:
+            raise CloudflareError(
+                "Cloudflare Zone 响应缺少 zone_id，无法确认 Email Routing 权限。"
+            )
+        await _check_email_routing_rules_write(client, zone_id)
 
 
 async def inspect_token_permissions(
@@ -350,13 +365,11 @@ async def inspect_token_permissions(
             f"已读取到 {len(zones)} 个可访问域名。",
         )
     )
-    first_zone_id = str(zones[0].get("id", ""))
-
     await _add_cloudflare_check(
         items,
         EMAIL_ROUTING_REQUIREMENT,
-        lambda: _check_email_routing_rules_write(client, first_zone_id),
-        "已通过 Email Routing 规则读/写权限探测。",
+        lambda: _check_email_routing_rules_write_for_zones(client, zones),
+        f"已通过 {len(zones)} 个域名的 Email Routing 规则读/写权限探测。",
     )
     await _add_cloudflare_check(
         items,
@@ -387,18 +400,16 @@ async def inspect_token_permissions(
 
 
 def ensure_report_passed(report: CFPermissionReport) -> None:
-    """权限报告未通过时抛出带结构化 data 的业务异常。"""
+    """权限报告未通过时抛出专用权限预检异常。"""
     if report.overall_status == "passed":
         return
     failed = [item for item in report.items if item.status == "failed"]
     summary = "；".join(f"{item.label}: {item.message}" for item in failed[:3])
     if len(failed) > 3:
         summary += f"；另有 {len(failed) - 3} 项未通过"
-    raise AppException(
+    raise CFPermissionPrecheckError(
         f"Cloudflare API Token 权限预检未通过：{summary}",
-        code=1403,
-        http_status=status.HTTP_403_FORBIDDEN,
-        data=report.model_dump(mode="json"),
+        report=report,
     )
 
 

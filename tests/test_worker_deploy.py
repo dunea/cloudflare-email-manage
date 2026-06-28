@@ -127,7 +127,7 @@ def _patch_deploy_ok(
         return []
 
     async def _list_email_sending(
-        self: CloudflareClient, account_id: str
+        self: CloudflareClient, zone_id: str
     ) -> list[dict[str, object]]:
         return []
 

@@ -124,10 +124,8 @@ async def update_cf_account(
     session: AsyncSession, cf_account: CFAccount, data: CFAccountUpdate
 ) -> CFAccount:
     """更新 CF 账号；若提供新 Token 则按原 account_id 重新校验后加密存储。"""
-    if data.name is not None:
-        cf_account.name = data.name
-    if data.is_active is not None:
-        cf_account.is_active = data.is_active
+    encrypted_api_token: str | None = None
+    permission_check: cf_permission_service.TokenPermissionCheckResult | None = None
     if data.api_token is not None:
         check = await cf_permission_service.inspect_token_permissions(
             data.api_token, cf_account.account_id
@@ -139,8 +137,16 @@ async def update_cf_account(
                 "请为当前 Account 重新创建 Token，或新增绑定账号。",
                 code=1403,
             )
-        cf_account.encrypted_api_token = encrypt_token(check.api_token)
-        cf_permission_service.store_report(cf_account, check.report)
+        encrypted_api_token = encrypt_token(check.api_token)
+        permission_check = check
+
+    if data.name is not None:
+        cf_account.name = data.name
+    if data.is_active is not None:
+        cf_account.is_active = data.is_active
+    if encrypted_api_token is not None and permission_check is not None:
+        cf_account.encrypted_api_token = encrypted_api_token
+        cf_permission_service.store_report(cf_account, permission_check.report)
 
     await session.commit()
     await session.refresh(cf_account)

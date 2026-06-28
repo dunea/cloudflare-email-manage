@@ -20,13 +20,25 @@ class AppException(Exception):
         message: str,
         code: int = 1,
         http_status: int = status.HTTP_400_BAD_REQUEST,
-        data: object | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.code = code
         self.http_status = http_status
-        self.data = data
+
+
+class CFPermissionPrecheckError(AppException):
+    """Cloudflare Token 权限预检失败，携带结构化检查报告。"""
+
+    def __init__(
+        self,
+        message: str,
+        report: object,
+        code: int = 1403,
+        http_status: int = status.HTTP_403_FORBIDDEN,
+    ) -> None:
+        super().__init__(message, code=code, http_status=http_status)
+        self.report = report
 
 
 class NotFoundError(AppException):
@@ -57,13 +69,11 @@ class CloudflareError(AppException):
         super().__init__(message, code=code, http_status=status.HTTP_502_BAD_GATEWAY)
 
 
-def _error_response(
-    code: int, message: str, http_status: int, data: object | None = None
-) -> JSONResponse:
+def _error_response(code: int, message: str, http_status: int) -> JSONResponse:
     """构造统一错误响应体。"""
     return JSONResponse(
         status_code=http_status,
-        content={"code": code, "data": data, "message": message},
+        content={"code": code, "data": None, "message": message},
     )
 
 
@@ -72,7 +82,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(AppException)
     async def _handle_app_exception(_: Request, exc: AppException) -> JSONResponse:
-        return _error_response(exc.code, exc.message, exc.http_status, exc.data)
+        return _error_response(exc.code, exc.message, exc.http_status)
 
     @app.exception_handler(RequestValidationError)
     async def _handle_validation_error(

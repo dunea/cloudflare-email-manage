@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field
 class CFPermissionCheckItem(BaseModel):
     """单项 Cloudflare Token 能力检查结果。"""
 
+    model_config = ConfigDict()
+
     key: str
     label: str
     status: Literal["passed", "failed"]
@@ -23,6 +25,8 @@ class CFPermissionCheckItem(BaseModel):
 class CFPermissionReport(BaseModel):
     """Cloudflare Token 权限预检报告。"""
 
+    model_config = ConfigDict()
+
     overall_status: Literal["passed", "failed"]
     checked_at: datetime
     account_id: str | None = None
@@ -32,6 +36,8 @@ class CFPermissionReport(BaseModel):
 
 class CFAccountTokenCheckRequest(BaseModel):
     """绑定前 Token 权限预检请求体，不落库。"""
+
+    model_config = ConfigDict()
 
     api_token: str = Field(min_length=1, description="CF API Token，仅用于检查，不回显")
     account_id: str | None = Field(default=None, max_length=64)
