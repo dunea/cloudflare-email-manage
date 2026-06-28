@@ -47,9 +47,65 @@ def _patch_verify_ok(monkeypatch: pytest.MonkeyPatch) -> None:
             }
         ]
 
+    async def _list_routing_rules(
+        self: CloudflareClient, zone_id: str
+    ) -> list[dict[str, object]]:
+        return []
+
+    async def _list_destinations(
+        self: CloudflareClient, account_id: str
+    ) -> list[dict[str, object]]:
+        return []
+
+    async def _list_email_sending(
+        self: CloudflareClient, account_id: str
+    ) -> list[dict[str, object]]:
+        return []
+
+    async def _probe_email_routing_rules_write(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _probe_destination_addresses_write(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _probe_email_sending_write(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _probe_worker_scripts_write(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
     monkeypatch.setattr(CloudflareClient, "verify_token", _verify)
     monkeypatch.setattr(CloudflareClient, "list_accounts", _list_accounts)
     monkeypatch.setattr(CloudflareClient, "list_zones", _list_zones)
+    monkeypatch.setattr(CloudflareClient, "list_routing_rules", _list_routing_rules)
+    monkeypatch.setattr(CloudflareClient, "list_destination_addresses", _list_destinations)
+    monkeypatch.setattr(
+        CloudflareClient, "list_email_sending_subdomains", _list_email_sending
+    )
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_email_routing_rules_write",
+        _probe_email_routing_rules_write,
+    )
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_destination_addresses_write",
+        _probe_destination_addresses_write,
+    )
+    monkeypatch.setattr(
+        CloudflareClient, "probe_email_sending_write", _probe_email_sending_write
+    )
+    monkeypatch.setattr(
+        CloudflareClient, "probe_worker_scripts_write", _probe_worker_scripts_write
+    )
 
 
 def _patch_verify_fail(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -106,12 +162,12 @@ async def test_dashboard_renders_stats(client: AsyncClient) -> None:
 async def test_bind_cf_account_success(
     client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """绑定成功后跳列表，Token 加密入库，列表可见。"""
+    """绑定成功后跳详情，Token 加密入库，列表可见。"""
     _patch_verify_ok(monkeypatch)
     await _web_login(client)
     resp = await _bind(client)
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/cf-accounts"
+    assert resp.headers["location"].startswith("/cf-accounts/")
 
     row = (await db_session.execute(select(CFAccount))).scalar_one()
     assert row.name == "主账号"
@@ -130,7 +186,7 @@ async def test_bind_cf_account_invalid_token(
     await _web_login(client)
     resp = await _bind(client)
     assert resp.status_code == 400
-    assert "Token 无效" in resp.text
+    assert "Cloudflare API Token 权限预检未通过" in resp.text
     rows = (await db_session.execute(select(CFAccount))).scalars().all()
     assert rows == []
 

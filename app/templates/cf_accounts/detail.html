@@ -8,6 +8,11 @@
     <h1 class="mt-2 text-2xl font-semibold text-slate-900">{{ account.name }}</h1>
   </div>
   <div class="flex gap-2">
+    <form method="post" action="/cf-accounts/{{ account.id }}/check-permissions">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <button type="submit"
+              class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">重新检查权限</button>
+    </form>
     <form method="post" action="/cf-accounts/{{ account.id }}/sync">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
       <button type="submit"
@@ -17,7 +22,8 @@
           x-data @submit.prevent="$store.confirm.ask($el, '将自动部署收件 Worker 到你的 CF 账号，并配置所有域名的 catch-all。需 Token 具备 Account:Workers Scripts:Edit 权限。是否继续？')">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
       <button type="submit"
-              class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">一键部署 Worker</button>
+              {% if not capability_report or capability_report.overall_status != 'passed' %}disabled title="请先通过权限预检"{% endif %}
+              class="rounded-lg px-4 py-2 text-sm font-semibold {% if capability_report and capability_report.overall_status == 'passed' %}bg-brand text-white hover:bg-brand-dark{% else %}cursor-not-allowed bg-slate-200 text-slate-500{% endif %}">一键部署 Worker</button>
     </form>
     <form method="post" action="/cf-accounts/{{ account.id }}/delete"
           x-data @submit.prevent="$store.confirm.ask($el, '确定解绑该 CF 账号？此操作不可撤销。')">
@@ -26,6 +32,43 @@
               class="rounded-lg border border-red-300 px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-50">解绑</button>
     </form>
   </div>
+</div>
+
+<div class="mb-6 rounded-xl border {% if capability_report and capability_report.overall_status == 'passed' %}border-emerald-200 bg-emerald-50{% elif capability_report %}border-red-200 bg-red-50{% else %}border-amber-200 bg-amber-50{% endif %} p-6">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h3 class="font-semibold text-slate-800">Cloudflare Token 权限预检</h3>
+      <p class="mt-1 text-sm text-slate-600">
+        {% if capability_report %}
+        最近检查：{{ capability_report.checked_at | dt }} · 可访问域名 {{ capability_report.zone_count }} 个
+        {% else %}
+        尚未检查。请先点击「重新检查权限」，通过后再部署 Worker。
+        {% endif %}
+      </p>
+    </div>
+    {% if capability_report %}
+    {% if capability_report.overall_status == 'passed' %}{{ badge("通过", "green") }}{% else %}{{ badge("未通过", "red") }}{% endif %}
+    {% else %}
+    {{ badge("待检查", "amber") }}
+    {% endif %}
+  </div>
+  {% if capability_report %}
+  <div class="mt-4 grid gap-3 lg:grid-cols-2">
+    {% for item in capability_report["items"] %}
+    <div class="rounded-lg border border-white/70 bg-white p-4">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h4 class="text-sm font-semibold text-slate-800">{{ item.label }}</h4>
+        {% if item.status == 'passed' %}{{ badge("通过", "green") }}{% else %}{{ badge("未通过", "red") }}{% endif %}
+      </div>
+      <p class="mt-2 text-sm text-slate-600">{{ item.message }}</p>
+      {% if item.status != 'passed' %}
+      <p class="mt-2 text-xs text-red-700">修复建议：{{ item.fix_hint }}</p>
+      <p class="mt-1 text-xs text-slate-500">需要权限：<code class="font-mono">{{ item.required_permission }}</code></p>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
 </div>
 
 <div class="grid gap-6 lg:grid-cols-2">
@@ -83,7 +126,7 @@
     <li>为缺失密钥的域名自动补生成 <code class="font-mono">webhook_secret</code>，已有密钥沿用</li>
     <li>每次部署会刷新所有域名的 catch-all 路由</li>
     <li>新增域名后需重新部署一次以更新密钥映射</li>
-    <li>CF API Token 需具备 <code class="font-mono">Account:Workers Scripts:Edit</code> 权限</li>
+    <li>CF API Token 必须通过上方权限预检，尤其需要 <code class="font-mono">Account:Workers Scripts:Edit</code> / <code class="font-mono">Workers Scripts Write</code></li>
     <li>每个域名独立签名密钥，验证 webhook 时按收件域名自动定位</li>
   </ul>
 </div>

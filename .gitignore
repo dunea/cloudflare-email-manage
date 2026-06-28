@@ -16,12 +16,15 @@ env/
 
 # 数据库
 *.db
+*.db-journal
 *.sqlite
 *.sqlite3
 db_backups/
 
 # 测试与缓存
 .pytest_cache/
+.pytest_tmp/
+.tmp_*/
 .ruff_cache/
 .coverage
 htmlcov/

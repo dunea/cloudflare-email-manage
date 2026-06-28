@@ -209,7 +209,8 @@ JSON API 统一前缀为 `/api/v1`，响应格式：
 
 ## Cloudflare API Token 权限
 
-创建 Cloudflare API Token 时按需授予：
+创建 Cloudflare API Token 时必须授予以下核心权限。绑定账号时系统会执行权限预检，
+缺少任一核心权限都会拒绝绑定，并返回具体失败项和修复建议。
 
 | 权限 | 用途 |
 |------|------|
@@ -217,7 +218,14 @@ JSON API 统一前缀为 `/api/v1`，响应格式：
 | `Account:Email Routing Addresses:Edit` | 管理转发目标地址 |
 | `Account:Email Send:Edit` | 使用 Cloudflare Email Sending 发件 |
 | `Zone:Zone:Read` | 读取域名和 Zone 信息 |
-| `Account:Workers Scripts:Edit` | 一键部署收件 Worker，可选 |
+| `Account:Workers Scripts:Edit` / `Workers Scripts Write` | 一键部署收件 Worker，必需 |
+
+Token 设置注意事项：
+
+- 资源范围必须覆盖要接入的 Account 和至少一个 Zone。
+- API Token 输入框只填写原始 Token，不要包含 `Bearer` 前缀。
+- 如果 Token 配置了来源 IP 限制，请放行本服务的公网出口 IP。
+- Workers Scripts 编辑权限是硬性门槛；没有该权限无法部署收件 Worker，也无法完整收发邮件。
 
 平台域名分配给用户后，用户只能使用对应域名能力，不能看到底层 Cloudflare API Token。
 
@@ -233,7 +241,7 @@ Worker 示例位于 [`examples/worker/`](examples/worker/)，包含 `wrangler.to
 
 ### 一键部署 Worker
 
-绑定 CF 账号后，如果 Token 包含 `Account:Workers Scripts:Edit` 权限，可以在 CF 账号详情页点击「一键部署 Worker」。平台会自动完成：
+绑定 CF 账号后，如果 Token 权限预检通过，可以在 CF 账号详情页点击「一键部署 Worker」。平台会自动完成：
 
 1. 启用各域名 Email Routing
 2. 上传 Worker 脚本并绑定 `WEBHOOK_URL`

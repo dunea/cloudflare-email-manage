@@ -63,13 +63,71 @@ def _patch_verify_ok(monkeypatch: pytest.MonkeyPatch) -> None:
                 "id": "zone-e2e",
                 "name": "e2e.example.com",
                 "status": "active",
-                "account": {"id": "acc-123", "name": "test-account"},
+                "account": {"id": account_id or "acc-123", "name": "test-account"},
             }
         ]
+
+    async def _fake_list_routing_rules(
+        self: CloudflareClient, zone_id: str
+    ) -> list[dict[str, object]]:
+        return []
+
+    async def _fake_list_destinations(
+        self: CloudflareClient, account_id: str
+    ) -> list[dict[str, object]]:
+        return []
+
+    async def _fake_list_email_sending(
+        self: CloudflareClient, account_id: str
+    ) -> list[dict[str, object]]:
+        return []
+
+    async def _fake_probe_email_routing_rules_write(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _fake_probe_destination_addresses_write(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _fake_probe_email_sending_write(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _fake_probe_worker_scripts_write(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
 
     monkeypatch.setattr(CloudflareClient, "verify_token", _fake_verify)
     monkeypatch.setattr(CloudflareClient, "list_accounts", _fake_list_accounts)
     monkeypatch.setattr(CloudflareClient, "list_zones", _fake_list_zones)
+    monkeypatch.setattr(CloudflareClient, "list_routing_rules", _fake_list_routing_rules)
+    monkeypatch.setattr(
+        CloudflareClient, "list_destination_addresses", _fake_list_destinations
+    )
+    monkeypatch.setattr(
+        CloudflareClient, "list_email_sending_subdomains", _fake_list_email_sending
+    )
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_email_routing_rules_write",
+        _fake_probe_email_routing_rules_write,
+    )
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_destination_addresses_write",
+        _fake_probe_destination_addresses_write,
+    )
+    monkeypatch.setattr(
+        CloudflareClient, "probe_email_sending_write", _fake_probe_email_sending_write
+    )
+    monkeypatch.setattr(
+        CloudflareClient, "probe_worker_scripts_write", _fake_probe_worker_scripts_write
+    )
 
 
 def _patch_verify_fail(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -129,6 +187,7 @@ async def test_bind_success(
     # 响应绝不暴露 Token
     assert "api_token" not in data
     assert "encrypted_api_token" not in data
+    assert data["capability_report"]["overall_status"] == "passed"
 
 
 async def test_bind_auto_account_id(
@@ -158,15 +217,183 @@ async def test_bind_encrypts_token_in_db(
 async def test_bind_invalid_token_rejected(
     client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Token 校验失败返回 502，且不落库。"""
+    """Token 校验失败返回结构化权限报告，且不落库。"""
     _patch_verify_fail(monkeypatch)
     token = await _register_and_login(client)
     resp = await _bind(client, token)
-    assert resp.status_code == 502
-    assert resp.json()["code"] == 1502
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["code"] == 1403
+    assert body["data"]["overall_status"] == "failed"
 
     count = (await db_session.execute(select(CFAccount))).scalars().all()
     assert count == []
+
+
+async def test_bind_rejects_bearer_prefix(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """误粘 Bearer 前缀时拒绝绑定并提示填写原始 Token。"""
+    _patch_verify_ok(monkeypatch)
+    token = await _register_and_login(client)
+    resp = await _bind(client, token, api_token="Bearer cf-secret")
+    assert resp.status_code == 403
+    body = resp.json()
+    assert "Bearer" in body["message"]
+    assert body["data"]["items"][0]["key"] == "token_auth"
+    rows = (await db_session.execute(select(CFAccount))).scalars().all()
+    assert rows == []
+
+
+async def test_bind_rejects_no_accessible_zone(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Token 没有可访问 Zone 时拒绝绑定。"""
+    _patch_verify_ok(monkeypatch)
+
+    async def _empty_zones(
+        self: CloudflareClient, account_id: str | None = None
+    ) -> list[dict[str, object]]:
+        return []
+
+    monkeypatch.setattr(CloudflareClient, "list_zones", _empty_zones)
+    token = await _register_and_login(client)
+    resp = await _bind(client, token)
+    assert resp.status_code == 403
+    body = resp.json()
+    assert any(item["key"] == "zone_read" for item in body["data"]["items"])
+    rows = (await db_session.execute(select(CFAccount))).scalars().all()
+    assert rows == []
+
+
+async def test_bind_rejects_missing_workers_permission(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """缺少 Workers Scripts 能力时拒绝绑定。"""
+    _patch_verify_ok(monkeypatch)
+
+    async def _workers_forbidden(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        raise CloudflareError("HTTP 403: missing permission")
+
+    monkeypatch.setattr(
+        CloudflareClient, "probe_worker_scripts_write", _workers_forbidden
+    )
+    token = await _register_and_login(client)
+    resp = await _bind(client, token)
+    assert resp.status_code == 403
+    body = resp.json()
+    workers = [
+        item for item in body["data"]["items"] if item["key"] == "workers_scripts"
+    ][0]
+    assert workers["status"] == "failed"
+    assert "Workers Scripts" in workers["required_permission"]
+    rows = (await db_session.execute(select(CFAccount))).scalars().all()
+    assert rows == []
+
+
+async def test_bind_rejects_missing_email_routing_write(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Email Routing 只能读不能写时拒绝绑定。"""
+    _patch_verify_ok(monkeypatch)
+
+    async def _routing_write_forbidden(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, str]:
+        raise CloudflareError("HTTP 403: missing Email Routing Rules Write")
+
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_email_routing_rules_write",
+        _routing_write_forbidden,
+    )
+    token = await _register_and_login(client)
+    resp = await _bind(client, token)
+    assert resp.status_code == 403
+    item = [
+        item for item in resp.json()["data"]["items"] if item["key"] == "email_routing"
+    ][0]
+    assert item["status"] == "failed"
+    assert "Email Routing" in item["required_permission"]
+    rows = (await db_session.execute(select(CFAccount))).scalars().all()
+    assert rows == []
+
+
+async def test_bind_rejects_missing_destination_address_write(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """目标地址只能读不能写时拒绝绑定。"""
+    _patch_verify_ok(monkeypatch)
+
+    async def _destination_write_forbidden(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        raise CloudflareError("HTTP 403: missing Email Routing Addresses Write")
+
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_destination_addresses_write",
+        _destination_write_forbidden,
+    )
+    token = await _register_and_login(client)
+    resp = await _bind(client, token)
+    assert resp.status_code == 403
+    item = [
+        item
+        for item in resp.json()["data"]["items"]
+        if item["key"] == "routing_addresses"
+    ][0]
+    assert item["status"] == "failed"
+    assert "Email Routing Addresses" in item["required_permission"]
+    rows = (await db_session.execute(select(CFAccount))).scalars().all()
+    assert rows == []
+
+
+async def test_bind_rejects_missing_email_sending_write(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """缺少 Email Sending 写权限时拒绝绑定。"""
+    _patch_verify_ok(monkeypatch)
+
+    async def _sending_write_forbidden(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        raise CloudflareError("HTTP 403: missing Email Send permission")
+
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_email_sending_write",
+        _sending_write_forbidden,
+    )
+    token = await _register_and_login(client)
+    resp = await _bind(client, token)
+    assert resp.status_code == 403
+    item = [
+        item for item in resp.json()["data"]["items"] if item["key"] == "email_sending"
+    ][0]
+    assert item["status"] == "failed"
+    assert "Email Send" in item["required_permission"]
+    rows = (await db_session.execute(select(CFAccount))).scalars().all()
+    assert rows == []
+
+
+async def test_check_token_permissions_endpoint(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """绑定前权限检查接口不落库，仅返回报告。"""
+    _patch_verify_ok(monkeypatch)
+    token = await _register_and_login(client)
+    resp = await client.post(
+        "/api/v1/cf-accounts/check-token",
+        headers=_auth(token),
+        json={"api_token": PLAINTEXT_TOKEN, "account_id": "acc-123"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["overall_status"] == "passed"
+    assert data["account_id"] == "acc-123"
 
 
 # ---- 查询 / 更新 / 删除 ----
@@ -248,6 +475,66 @@ async def test_update_cf_account(
     )
     assert resp.status_code == 200
     assert resp.json()["data"]["name"] == "新名称"
+
+
+async def test_update_cf_account_token_same_account(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同一 CF Account 下更换 Token 成功，account_id 不变。"""
+    _patch_verify_ok(monkeypatch)
+    token = await _register_and_login(client)
+    account_id = (await _bind(client, token)).json()["data"]["id"]
+    resp = await client.patch(
+        f"/api/v1/cf-accounts/{account_id}",
+        headers=_auth(token),
+        json={"api_token": "new-cf-token"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["account_id"] == "acc-123"
+
+    row = (
+        await db_session.execute(select(CFAccount).where(CFAccount.id == account_id))
+    ).scalar_one()
+    await db_session.refresh(row)
+    assert row.account_id == "acc-123"
+    assert decrypt_token(row.encrypted_api_token) == "new-cf-token"
+
+
+async def test_update_cf_account_token_other_account_rejected(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """更换为另一个 CF Account 的 Token 时拒绝，旧 Token 和 account_id 不变。"""
+    _patch_verify_ok(monkeypatch)
+    token = await _register_and_login(client)
+    account_id = (await _bind(client, token)).json()["data"]["id"]
+
+    async def _other_account_zones(
+        self: CloudflareClient, account_id: str | None = None
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "id": "zone-other",
+                "name": "other.example.com",
+                "status": "active",
+                "account": {"id": "acc-other", "name": "other"},
+            }
+        ]
+
+    monkeypatch.setattr(CloudflareClient, "list_zones", _other_account_zones)
+    resp = await client.patch(
+        f"/api/v1/cf-accounts/{account_id}",
+        headers=_auth(token),
+        json={"api_token": "other-account-token"},
+    )
+    assert resp.status_code == 403
+    assert "另一个 Cloudflare Account" in resp.json()["message"]
+
+    row = (
+        await db_session.execute(select(CFAccount).where(CFAccount.id == account_id))
+    ).scalar_one()
+    await db_session.refresh(row)
+    assert row.account_id == "acc-123"
+    assert decrypt_token(row.encrypted_api_token) == PLAINTEXT_TOKEN
 
 
 async def test_delete_cf_account(

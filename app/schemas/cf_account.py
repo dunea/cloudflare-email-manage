@@ -4,8 +4,37 @@
 """
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class CFPermissionCheckItem(BaseModel):
+    """单项 Cloudflare Token 能力检查结果。"""
+
+    key: str
+    label: str
+    status: Literal["passed", "failed"]
+    required_permission: str
+    message: str
+    fix_hint: str
+
+
+class CFPermissionReport(BaseModel):
+    """Cloudflare Token 权限预检报告。"""
+
+    overall_status: Literal["passed", "failed"]
+    checked_at: datetime
+    account_id: str | None = None
+    zone_count: int = 0
+    items: list[CFPermissionCheckItem] = Field(default_factory=list)
+
+
+class CFAccountTokenCheckRequest(BaseModel):
+    """绑定前 Token 权限预检请求体，不落库。"""
+
+    api_token: str = Field(min_length=1, description="CF API Token，仅用于检查，不回显")
+    account_id: str | None = Field(default=None, max_length=64)
 
 
 class CFAccountCreate(BaseModel):
@@ -35,6 +64,8 @@ class CFAccountRead(BaseModel):
     account_id: str
     is_active: bool
     created_at: datetime
+    capability_report: CFPermissionReport | None = None
+    capability_checked_at: datetime | None = None
 
 
 class DeployedDomain(BaseModel):

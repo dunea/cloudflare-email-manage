@@ -101,6 +101,56 @@ def _patch_deploy_ok(
         "enable_calls": [],
     }
 
+    async def _verify(self: CloudflareClient) -> dict[str, str]:
+        return {"status": "active"}
+
+    async def _list_zones(
+        self: CloudflareClient, account_id: str | None = None
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "id": "z1",
+                "name": "a.com",
+                "status": "active",
+                "account": {"id": account_id or "acc-1", "name": "test"},
+            }
+        ]
+
+    async def _list_routing_rules(
+        self: CloudflareClient, zone_id: str
+    ) -> list[dict[str, object]]:
+        return []
+
+    async def _list_destinations(
+        self: CloudflareClient, account_id: str
+    ) -> list[dict[str, object]]:
+        return []
+
+    async def _list_email_sending(
+        self: CloudflareClient, account_id: str
+    ) -> list[dict[str, object]]:
+        return []
+
+    async def _probe_email_routing_rules_write(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _probe_destination_addresses_write(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _probe_email_sending_write(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _probe_worker_scripts_write(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
     async def _status(
         self: CloudflareClient, zone_id: str
     ) -> dict[str, object]:
@@ -148,6 +198,29 @@ def _patch_deploy_ok(
         calls.append((zone_id, worker_name))
         return {"enabled": True, "actions": [{"type": "worker", "value": [worker_name]}]}
 
+    monkeypatch.setattr(CloudflareClient, "verify_token", _verify)
+    monkeypatch.setattr(CloudflareClient, "list_zones", _list_zones)
+    monkeypatch.setattr(CloudflareClient, "list_routing_rules", _list_routing_rules)
+    monkeypatch.setattr(CloudflareClient, "list_destination_addresses", _list_destinations)
+    monkeypatch.setattr(
+        CloudflareClient, "list_email_sending_subdomains", _list_email_sending
+    )
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_email_routing_rules_write",
+        _probe_email_routing_rules_write,
+    )
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_destination_addresses_write",
+        _probe_destination_addresses_write,
+    )
+    monkeypatch.setattr(
+        CloudflareClient, "probe_email_sending_write", _probe_email_sending_write
+    )
+    monkeypatch.setattr(
+        CloudflareClient, "probe_worker_scripts_write", _probe_worker_scripts_write
+    )
     monkeypatch.setattr(CloudflareClient, "get_email_routing_status", _status)
     monkeypatch.setattr(CloudflareClient, "enable_email_routing", _enable)
     monkeypatch.setattr(CloudflareClient, "upload_worker_script", _upload)
@@ -249,6 +322,34 @@ async def test_deploy_upload_failure_wraps_permission_hint(
     with pytest.raises(AppException) as ei:
         await worker_deploy_service.deploy_worker_for_account(db_session, cf_account)
     assert "Workers Scripts:Edit" in str(ei.value.message)
+
+
+async def test_deploy_permission_precheck_failure_does_not_upload(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """部署前权限预检失败时，不上传 Worker、不写 secret、不改 catch-all。"""
+    from app.exceptions import CloudflareError
+
+    _user, cf_account, _ = await _make_user_with_account_and_domains(
+        db_session, domains=[("z1", "a.com")]
+    )
+    cap = _patch_deploy_ok(monkeypatch)
+
+    async def _workers_forbidden(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        raise CloudflareError("HTTP 403: missing permission")
+
+    monkeypatch.setattr(
+        CloudflareClient, "probe_worker_scripts_write", _workers_forbidden
+    )
+
+    with pytest.raises(AppException) as ei:
+        await worker_deploy_service.deploy_worker_for_account(db_session, cf_account)
+    assert "Workers 脚本" in ei.value.message
+    assert cap["upload_calls"] == 0
+    assert cap["secret_calls"] == 0
+    assert cap["catch_all_calls"] == []
 
 
 async def test_deploy_email_routing_enabled_when_disabled(

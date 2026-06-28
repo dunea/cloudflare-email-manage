@@ -37,6 +37,7 @@ from app.config import settings
 from app.exceptions import AppException, CloudflareError
 from app.models import CFAccount, Domain
 from app.schemas.cf_account import DeployedDomain, WorkerDeployResult
+from app.services import cf_permission_service
 from app.services.cf_account_service import build_client
 from app.services.cloudflare import WorkerBinding
 
@@ -143,6 +144,12 @@ async def deploy_worker_for_account(
             code=1400,
         )
 
+    # 部署前重新检查 Token 核心能力，避免旧 Token 权限被外部收回后进入半部署状态。
+    report = await cf_permission_service.refresh_cf_account_permissions(
+        session, cf_account
+    )
+    cf_permission_service.ensure_report_passed(report)
+
     # 2. 内存中预生成缺失的 webhook_secret（延后 commit）
     _prepare_domain_secrets(domains)
 
@@ -183,11 +190,12 @@ async def deploy_worker_for_account(
             bindings=bindings,
         )
     except CloudflareError as exc:
-        # 权限不足时给出可读提示
+        hint = cf_permission_service.describe_cloudflare_error(exc)
         if "10000" in str(exc) or "403" in str(exc) or "permission" in str(exc).lower():
             raise AppException(
-                "部署 Worker 失败: CF API Token 缺少 Account:Workers Scripts:Edit 权限。"
-                "请在 Cloudflare Dashboard 创建具备该权限的 Token 后重新绑定。",
+                "部署 Worker 失败：无法上传 Worker 脚本。"
+                f"{hint} 请确认 Token 具备 Account:Workers Scripts:Edit / "
+                "Workers Scripts Write，并重新检查权限。",
                 code=1403,
                 http_status=403,
             ) from exc
