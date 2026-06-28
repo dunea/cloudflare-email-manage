@@ -43,8 +43,18 @@ def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> None:
+class _CFCalls:
+    """记录目标地址与转发规则相关 CF 调用。"""
+
+    def __init__(self) -> None:
+        self.dest_items: list[dict[str, Any]] = []
+        self.created_rules: list[tuple[str, dict[str, Any]]] = []
+        self.deleted_rules: list[tuple[str, str]] = []
+
+
+def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> _CFCalls:
     """Mock CloudflareClient 的 CF 调用。"""
+    calls = _CFCalls()
 
     async def _fake_verify(self: CloudflareClient) -> dict[str, str]:
         return {"status": "active"}
@@ -62,12 +72,24 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_list_dests(
         self: CloudflareClient, account_id: str
     ) -> list[dict[str, Any]]:
-        return []
+        return calls.dest_items
 
     async def _fake_delete_dest(
         self: CloudflareClient, account_id: str, address_id: str
     ) -> dict[str, Any]:
         return {"id": address_id}
+
+    async def _fake_create_rule(
+        self: CloudflareClient, zone_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        calls.created_rules.append((zone_id, payload))
+        return {"id": f"cf-rule-{len(calls.created_rules)}", "enabled": True}
+
+    async def _fake_delete_rule(
+        self: CloudflareClient, zone_id: str, rule_id: str
+    ) -> dict[str, Any]:
+        calls.deleted_rules.append((zone_id, rule_id))
+        return {"id": rule_id}
 
     monkeypatch.setattr(CloudflareClient, "verify_token", _fake_verify)
     monkeypatch.setattr(CloudflareClient, "list_zones", _fake_list_zones)
@@ -80,6 +102,9 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         CloudflareClient, "delete_destination_address", _fake_delete_dest
     )
+    monkeypatch.setattr(CloudflareClient, "create_routing_rule", _fake_create_rule)
+    monkeypatch.setattr(CloudflareClient, "delete_routing_rule", _fake_delete_rule)
+    return calls
 
 
 async def _bind(client: AsyncClient, token: str) -> int:
@@ -94,6 +119,20 @@ async def _bind(client: AsyncClient, token: str) -> int:
         },
     )
     return resp.json()["data"]["id"]
+
+
+async def _sync_and_create_email(client: AsyncClient, token: str, account_id: int) -> int:
+    """同步域名并创建一个邮箱地址，返回邮箱地址 id。"""
+    sync = await client.post(
+        f"/api/v1/cf-accounts/{account_id}/sync", headers=_auth(token)
+    )
+    domain_id = sync.json()["data"]["domains"][0]["id"]
+    created = await client.post(
+        "/api/v1/email-addresses",
+        headers=_auth(token),
+        json={"domain_id": domain_id, "local_part": "hello"},
+    )
+    return created.json()["data"]["id"]
 
 
 # ---- 添加 ----
@@ -281,6 +320,28 @@ async def test_sync_removes_remotely_deleted(
     assert resp.json()["data"] == []
 
 
+async def test_sync_blocked_when_cf_account_inactive(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """停用 CF 账号后不能同步目标地址。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    account_id = await _bind(client, token)
+    await client.patch(
+        f"/api/v1/cf-accounts/{account_id}",
+        headers=_auth(token),
+        json={"is_active": False},
+    )
+
+    resp = await client.post(
+        "/api/v1/destination-addresses/sync",
+        headers=_auth(token),
+        params={"cf_account_id": account_id},
+    )
+    assert resp.status_code == 403
+    assert "已停用" in resp.json()["message"]
+
+
 # ---- 删除 ----
 
 
@@ -308,3 +369,44 @@ async def test_delete_destination_address(
         "/api/v1/destination-addresses", headers=_auth(token)
     )
     assert listing.json()["data"]["total"] == 0
+
+
+async def test_delete_destination_disables_impacted_forwarding_rules(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """删除目标地址前，会删除引用它的远端 rule 并停用本地转发规则。"""
+    calls = _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    account_id = await _bind(client, token)
+    ea_id = await _sync_and_create_email(client, token, account_id)
+
+    created_dest = await client.post(
+        "/api/v1/destination-addresses",
+        headers=_auth(token),
+        json={"cf_account_id": account_id, "email": "dest@gmail.com"},
+    )
+    address_id = created_dest.json()["data"]["id"]
+    calls.dest_items = [
+        {
+            "id": "cf-dest-dest@gmail.com",
+            "email": "dest@gmail.com",
+            "verified": "2026-06-26T08:00:00Z",
+        }
+    ]
+    created_rule = await client.post(
+        "/api/v1/forwarding-rules",
+        headers=_auth(token),
+        json={"email_address_id": ea_id, "destination_email": "dest@gmail.com"},
+    )
+    assert created_rule.status_code == 201
+
+    resp = await client.delete(
+        f"/api/v1/destination-addresses/{address_id}", headers=_auth(token)
+    )
+    assert resp.status_code == 200
+    assert calls.deleted_rules == [("zone1", "cf-rule-1")]
+
+    listing = await client.get("/api/v1/forwarding-rules", headers=_auth(token))
+    rule = listing.json()["data"]["items"][0]
+    assert rule["is_active"] is False
+    assert rule["cf_rule_id"] is None

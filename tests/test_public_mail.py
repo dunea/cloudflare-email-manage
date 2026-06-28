@@ -192,6 +192,35 @@ async def test_text_endpoint_empty_mailbox(
     assert "暂无邮件" in resp.text
 
 
+async def test_public_mail_rate_limit(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """公开邮件链接连续访问超过配置阈值后返回 429。"""
+    _patch_cf(monkeypatch)
+    monkeypatch.setattr(settings, "PUBLIC_MAIL_RATE_LIMIT_ATTEMPTS", 1)
+    monkeypatch.setattr(settings, "PUBLIC_MAIL_RATE_LIMIT_WINDOW_SECONDS", 60)
+    token = await _register_and_login(client)
+    public_token = await _setup(client, token)
+
+    first = await client.get(f"/mail/{public_token}.txt")
+    assert first.status_code == 200
+    second = await client.get(f"/mail/{public_token}.txt")
+    assert second.status_code == 429
+
+
+async def test_public_mail_ip_rate_limit_blocks_token_enumeration(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同一 IP 枚举不同 token 时也会被公开邮件全局限流拦截。"""
+    monkeypatch.setattr(settings, "PUBLIC_MAIL_RATE_LIMIT_ATTEMPTS", 1)
+    monkeypatch.setattr(settings, "PUBLIC_MAIL_RATE_LIMIT_WINDOW_SECONDS", 60)
+
+    first = await client.get("/mail/invalid-token-a.txt")
+    assert first.status_code == 404
+    second = await client.get("/mail/invalid-token-b.txt")
+    assert second.status_code == 429
+
+
 async def test_html_endpoint_empty_mailbox(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

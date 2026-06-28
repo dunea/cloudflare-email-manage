@@ -152,6 +152,26 @@ async def test_sync_unknown_account(
     assert resp.status_code == 404
 
 
+async def test_sync_blocked_when_cf_account_inactive(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """停用 CF 账号后不能同步域名。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    account_id = await _bind(client, token)
+    await client.patch(
+        f"/api/v1/cf-accounts/{account_id}",
+        headers=_auth(token),
+        json={"is_active": False},
+    )
+
+    resp = await client.post(
+        f"/api/v1/cf-accounts/{account_id}/sync", headers=_auth(token)
+    )
+    assert resp.status_code == 403
+    assert "已停用" in resp.json()["message"]
+
+
 # ---- 列表 / 详情 / 访问隔离 ----
 
 

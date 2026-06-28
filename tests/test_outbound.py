@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from httpx import AsyncClient
 
+from app.config import settings
 from app.services.cloudflare import CloudflareClient
 
 # 模拟 CF 返回的 Zone 列表
@@ -94,6 +95,14 @@ async def _setup_email_address(client: AsyncClient, token: str) -> str:
 
     需在调用前完成 _patch_cf。
     """
+    _account_id, full_address = await _setup_email_address_with_account(client, token)
+    return full_address
+
+
+async def _setup_email_address_with_account(
+    client: AsyncClient, token: str
+) -> tuple[int, str]:
+    """绑定并同步域名、创建邮箱地址，返回账号 id 与 full_address。"""
     account_id = await _bind(client, token)
     sync = await client.post(
         f"/api/v1/cf-accounts/{account_id}/sync", headers=_auth(token)
@@ -104,7 +113,7 @@ async def _setup_email_address(client: AsyncClient, token: str) -> str:
         headers=_auth(token),
         json={"domain_id": domain_id, "local_part": "hello"},
     )
-    return created.json()["data"]["full_address"]
+    return account_id, created.json()["data"]["full_address"]
 
 
 # ---- 发件 ----
@@ -250,6 +259,66 @@ async def test_send_via_api_key(
     assert "text" not in payload
 
 
+async def test_send_via_api_key_requires_send_scope(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """API Key 缺少 send scope 时不能发件。"""
+    calls = _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    await _setup_email_address(client, token)
+
+    key_resp = await client.post(
+        "/api/v1/api-keys",
+        headers=_auth(token),
+        json={"name": "readonly", "scopes": ["read_inbound"]},
+    )
+    raw_key = key_resp.json()["data"]["key"]
+
+    resp = await client.post(
+        "/api/v1/outbound/send",
+        headers={"X-API-Key": raw_key},
+        json={
+            "from_address": "hello@example.com",
+            "to": ["dest@other.com"],
+            "subject": "Hi",
+            "text": "x",
+        },
+    )
+    assert resp.status_code == 403
+    assert len(calls.sent) == 0
+
+
+async def test_api_key_rate_limit(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """API Key 调用超过配置阈值后返回 429。"""
+    _patch_cf(monkeypatch)
+    monkeypatch.setattr(settings, "API_KEY_RATE_LIMIT_ATTEMPTS", 1)
+    monkeypatch.setattr(settings, "API_KEY_RATE_LIMIT_WINDOW_SECONDS", 60)
+    token = await _register_and_login(client)
+    await _setup_email_address(client, token)
+
+    key_resp = await client.post(
+        "/api/v1/api-keys", headers=_auth(token), json={"name": "prog"}
+    )
+    raw_key = key_resp.json()["data"]["key"]
+    payload = {
+        "from_address": "hello@example.com",
+        "to": ["dest@other.com"],
+        "subject": "Hi",
+        "text": "x",
+    }
+
+    first = await client.post(
+        "/api/v1/outbound/send", headers={"X-API-Key": raw_key}, json=payload
+    )
+    assert first.status_code == 200
+    second = await client.post(
+        "/api/v1/outbound/send", headers={"X-API-Key": raw_key}, json=payload
+    )
+    assert second.status_code == 429
+
+
 async def test_send_with_invalid_api_key(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -288,3 +357,31 @@ async def test_send_case_insensitive_from_address(
     )
     assert resp.status_code == 200
     assert len(calls.sent) == 1
+
+
+async def test_send_blocked_when_cf_account_inactive(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """停用 CF 账号后，已有邮箱地址也不能继续发件。"""
+    calls = _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    account_id, _full_address = await _setup_email_address_with_account(client, token)
+    await client.patch(
+        f"/api/v1/cf-accounts/{account_id}",
+        headers=_auth(token),
+        json={"is_active": False},
+    )
+
+    resp = await client.post(
+        "/api/v1/outbound/send",
+        headers=_auth(token),
+        json={
+            "from_address": "hello@example.com",
+            "to": ["dest@other.com"],
+            "subject": "Hi",
+            "text": "x",
+        },
+    )
+    assert resp.status_code == 403
+    assert "已停用" in resp.json()["message"]
+    assert len(calls.sent) == 0

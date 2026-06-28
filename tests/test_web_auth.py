@@ -3,7 +3,10 @@
 复用 conftest 的 client（内存数据库 + ASGITransport）。
 """
 
+import pytest
 from httpx import AsyncClient
+
+from app.config import settings
 
 
 async def test_login_page_renders(client: AsyncClient) -> None:
@@ -90,6 +93,29 @@ async def test_login_invalid_credentials_rerenders(client: AsyncClient) -> None:
     )
     assert resp.status_code == 400
     assert "用户名或密码错误" in resp.text
+
+
+async def test_login_rate_limit(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """连续登录失败超过阈值后返回 429。"""
+    monkeypatch.setattr(settings, "LOGIN_RATE_LIMIT_ATTEMPTS", 1)
+    monkeypatch.setattr(settings, "LOGIN_RATE_LIMIT_WINDOW_SECONDS", 60)
+
+    first = await client.post(
+        "/login",
+        data={"username": "ghost", "password": "wrongpass"},
+        follow_redirects=False,
+    )
+    assert first.status_code == 400
+
+    second = await client.post(
+        "/login",
+        data={"username": "ghost", "password": "wrongpass"},
+        follow_redirects=False,
+    )
+    assert second.status_code == 429
+    assert "请求过于频繁" in second.text
 
 
 async def test_register_short_password_rerenders(client: AsyncClient) -> None:

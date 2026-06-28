@@ -11,7 +11,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.exceptions import AppException, NotFoundError
-from app.models import CFAccount, DestinationAddress, User
+from app.models import (
+    CFAccount,
+    DestinationAddress,
+    Domain,
+    EmailAddress,
+    ForwardingRule,
+    User,
+)
 from app.schemas.destination_address import DestinationAddressCreate
 from app.services.cf_account_service import build_client
 
@@ -205,17 +212,44 @@ async def list_destination_addresses(
 async def delete_destination_address(
     session: AsyncSession, address: DestinationAddress
 ) -> None:
-    """删除目标地址：先调用 CF 删除（会停用引用规则），再软删除本地记录。"""
+    """删除目标地址：先停用引用规则，再调用 CF 删除并软删除本地记录。"""
     cf_account = (
         await session.execute(
-            select(CFAccount).where(CFAccount.id == address.cf_account_id)
+            select(CFAccount).where(
+                CFAccount.id == address.cf_account_id,
+                CFAccount.is_deleted.is_(False),
+            )
         )
     ).scalar_one_or_none()
-    if cf_account is not None:
-        client = build_client(cf_account)
-        await client.delete_destination_address(
-            cf_account.account_id, address.cf_address_id
+    if cf_account is None:
+        raise NotFoundError("CF 账号不存在")
+
+    client = build_client(cf_account)
+    impacted_rules = (
+        await session.execute(
+            select(ForwardingRule, Domain.zone_id)
+            .join(
+                EmailAddress,
+                ForwardingRule.email_address_id == EmailAddress.id,
+            )
+            .join(Domain, EmailAddress.domain_id == Domain.id)
+            .where(
+                Domain.cf_account_id == address.cf_account_id,
+                func.lower(ForwardingRule.destination_email)
+                == address.email.lower(),
+                ForwardingRule.is_deleted.is_(False),
+            )
         )
+    ).all()
+    for rule, zone_id in impacted_rules:
+        if rule.cf_rule_id:
+            await client.delete_routing_rule(zone_id, rule.cf_rule_id)
+            rule.cf_rule_id = None
+        rule.is_active = False
+
+    await client.delete_destination_address(
+        cf_account.account_id, address.cf_address_id
+    )
     address.is_deleted = True
     await session.commit()
 

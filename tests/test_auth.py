@@ -3,7 +3,10 @@
 测试中 CF API 无涉及；数据库为每个用例独立的内存库。
 """
 
+import pytest
 from httpx import AsyncClient
+
+from app.config import settings
 
 
 async def _register(
@@ -107,6 +110,25 @@ async def test_login_nonexistent_user(client: AsyncClient) -> None:
         json={"username": "ghost", "password": "whatever1"},
     )
     assert resp.status_code == 401
+
+
+async def test_api_login_rate_limit(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """API 登录连续失败超过阈值后返回 429。"""
+    monkeypatch.setattr(settings, "LOGIN_RATE_LIMIT_ATTEMPTS", 1)
+    monkeypatch.setattr(settings, "LOGIN_RATE_LIMIT_WINDOW_SECONDS", 60)
+
+    first = await client.post(
+        "/api/v1/auth/login",
+        json={"username": "ghost", "password": "wrongpass1"},
+    )
+    assert first.status_code == 401
+    second = await client.post(
+        "/api/v1/auth/login",
+        json={"username": "ghost", "password": "wrongpass1"},
+    )
+    assert second.status_code == 429
 
 
 async def test_refresh_success(client: AsyncClient) -> None:

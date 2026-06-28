@@ -3,12 +3,15 @@
 路由层只做参数接收、调用 service 并返回统一响应。
 """
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Request, status
 
+from app.config import settings
 from app.dependencies import SessionDep
+from app.exceptions import AppException
 from app.schemas.common import ApiResponse
 from app.schemas.user import Token, TokenRefresh, UserCreate, UserLogin, UserRead
 from app.services import auth_service
+from app.services.rate_limit import client_ip, hit, reset
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 
@@ -26,9 +29,24 @@ async def register(data: UserCreate, session: SessionDep) -> ApiResponse[UserRea
 
 
 @router.post("/login", response_model=ApiResponse[Token], summary="用户登录")
-async def login(data: UserLogin, session: SessionDep) -> ApiResponse[Token]:
+async def login(
+    request: Request, data: UserLogin, session: SessionDep
+) -> ApiResponse[Token]:
     """校验账号密码并返回访问/刷新令牌。"""
-    user = await auth_service.authenticate_user(session, data.username, data.password)
+    bucket_key = f"{client_ip(request)}:{data.username.lower()}"
+    try:
+        user = await auth_service.authenticate_user(
+            session, data.username, data.password
+        )
+    except AppException:
+        hit(
+            "login",
+            bucket_key,
+            settings.LOGIN_RATE_LIMIT_ATTEMPTS,
+            settings.LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+        )
+        raise
+    reset("login", bucket_key)
     return ApiResponse(data=auth_service.issue_tokens(user))
 
 

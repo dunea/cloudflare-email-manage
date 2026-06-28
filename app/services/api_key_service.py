@@ -11,12 +11,13 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.exceptions import AuthError, NotFoundError
+from app.exceptions import AuthError, NotFoundError, PermissionError
 from app.models import APIKey, User
-from app.schemas.api_key import APIKeyCreate, APIKeyUpdate
+from app.schemas.api_key import APIKeyCreate, APIKeyUpdate, normalize_scopes
 
 # API Key 前缀，便于识别与吊销
 _KEY_PREFIX = "cfem_"
+_DEFAULT_SCOPES_CSV = "send,read_inbound"
 
 
 def generate_api_key() -> str:
@@ -29,6 +30,16 @@ def hash_api_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
+def scopes_to_csv(scopes: list[str]) -> str:
+    """将权限列表序列化为稳定的逗号分隔字符串。"""
+    return ",".join(normalize_scopes(scopes))
+
+
+def api_key_has_scope(api_key: APIKey, scope: str) -> bool:
+    """判断 API Key 是否具备指定权限。"""
+    return scope in normalize_scopes(api_key.scopes or _DEFAULT_SCOPES_CSV)
+
+
 async def create_api_key(
     session: AsyncSession, user: User, data: APIKeyCreate
 ) -> tuple[APIKey, str]:
@@ -38,6 +49,7 @@ async def create_api_key(
         user_id=user.id,
         key_hash=hash_api_key(raw_key),
         name=data.name,
+        scopes=scopes_to_csv(data.scopes),
     )
     session.add(api_key)
     await session.commit()
@@ -85,6 +97,8 @@ async def update_api_key(
         api_key.name = data.name
     if data.is_active is not None:
         api_key.is_active = data.is_active
+    if data.scopes is not None:
+        api_key.scopes = scopes_to_csv(data.scopes)
     await session.commit()
     await session.refresh(api_key)
     return api_key
@@ -97,7 +111,9 @@ async def delete_api_key(session: AsyncSession, api_key: APIKey) -> None:
     await session.commit()
 
 
-async def authenticate_api_key(session: AsyncSession, raw_key: str) -> User:
+async def authenticate_api_key(
+    session: AsyncSession, raw_key: str, required_scope: str | None = None
+) -> User:
     """校验 X-API-Key 原始串，返回所属用户并更新 last_used_at。"""
     key_hash = hash_api_key(raw_key)
     api_key = (
@@ -111,6 +127,8 @@ async def authenticate_api_key(session: AsyncSession, raw_key: str) -> User:
     ).scalar_one_or_none()
     if api_key is None:
         raise AuthError("无效的 API Key")
+    if required_scope is not None and not api_key_has_scope(api_key, required_scope):
+        raise PermissionError("API Key 权限不足")
 
     user = (
         await session.execute(

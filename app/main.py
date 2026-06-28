@@ -17,7 +17,10 @@ from app.database import async_session_maker
 from app.exceptions import register_exception_handlers
 from app.routers import api_router
 from app.services.auth_service import ensure_admin_user
-from app.services.migration_service import auto_migrate_sqlite
+from app.services.migration_service import (
+    auto_migrate_sqlite,
+    ensure_sqlite_schema_current,
+)
 from app.web import web_router
 from app.web.deps import WebRedirect, set_auth_cookies
 
@@ -37,6 +40,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     避免与 Alembic 异步迁移环境中的 ``asyncio.run`` 冲突。
     """
     settings.validate_for_startup()
+    await asyncio.to_thread(ensure_sqlite_schema_current)
     await asyncio.to_thread(auto_migrate_sqlite)
     async with async_session_maker() as session:
         await ensure_admin_user(session)

@@ -10,9 +10,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.exceptions import AppException, NotFoundError
-from app.models import EmailAddress, User
+from app.models import CFAccount, EmailAddress, User
 from app.schemas.email_address import EmailAddressCreate, EmailAddressUpdate
 from app.services import domain_service
+from app.services.cf_account_service import ensure_cf_account_usable
 
 
 def _new_public_token() -> str:
@@ -26,6 +27,14 @@ async def create_email_address(
     """创建邮箱地址：校验域名可访问后拼接 full_address 并入库。"""
     # 校验域名存在且当前用户可访问（自有或被分配）
     domain = await domain_service.get_domain_or_404(session, data.domain_id, user)
+    cf_account = (
+        await session.execute(
+            select(CFAccount).where(CFAccount.id == domain.cf_account_id)
+        )
+    ).scalar_one_or_none()
+    if cf_account is None:
+        raise NotFoundError("CF 账号不存在")
+    ensure_cf_account_usable(cf_account)
     # 邮箱地址统一小写存储（邮件协议域名不区分大小写，多数实现 local-part 也不区分）
     local_part = data.local_part.lower()
     full_address = f"{local_part}@{domain.domain_name.lower()}"

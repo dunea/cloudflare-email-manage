@@ -1,7 +1,7 @@
 """应用配置：使用 pydantic-settings 从 .env 读取环境变量。"""
 
 from functools import lru_cache
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     # 仅供 e2e 测试：置 true 时 CloudflareClient 返回内置假数据，不发真实请求
     CF_FAKE_MODE: bool = False
 
+    # 安全限制（单实例内存限流，适合轻量自部署）
+    TRUST_PROXY_HEADERS: bool = False
+    TRUSTED_PROXY_IPS: str = ""
+    LOGIN_RATE_LIMIT_ATTEMPTS: int = 5
+    LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = 300
+    API_KEY_RATE_LIMIT_ATTEMPTS: int = 120
+    API_KEY_RATE_LIMIT_WINDOW_SECONDS: int = 60
+    PUBLIC_MAIL_RATE_LIMIT_ATTEMPTS: int = 60
+    PUBLIC_MAIL_RATE_LIMIT_WINDOW_SECONDS: int = 60
+    WEBHOOK_MAX_BYTES: int = 1024 * 1024
+
     @property
     def is_production(self) -> bool:
         """是否生产环境。"""
@@ -83,6 +94,11 @@ class Settings(BaseSettings):
             errors.append("生产环境必须启用 CSRF_PROTECTION")
         if not _is_public_https_url(self.APP_BASE_URL):
             errors.append("APP_BASE_URL 必须是公网可达的 HTTPS URL")
+        if self.TRUST_PROXY_HEADERS:
+            try:
+                _parse_trusted_proxy_networks(self.TRUSTED_PROXY_IPS)
+            except ValueError:
+                errors.append("TRUSTED_PROXY_IPS 必须配置合法的 IP 或 CIDR")
 
         if errors:
             raise RuntimeError("生产配置校验失败: " + "；".join(errors))
@@ -114,6 +130,14 @@ def _is_public_https_url(value: str) -> bool:
             and not host.endswith(blocked_suffixes)
         )
     return ip.is_global and not ip.is_multicast and not ip.is_unspecified
+
+
+def _parse_trusted_proxy_networks(value: str) -> list[object]:
+    """解析可信代理 IP/CIDR 配置，供生产启动校验使用。"""
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    if not items:
+        raise ValueError("empty trusted proxy list")
+    return [ip_network(item, strict=False) for item in items]
 
 
 @lru_cache

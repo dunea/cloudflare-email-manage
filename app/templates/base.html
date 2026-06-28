@@ -22,8 +22,8 @@
   <!-- Emoji favicon（内联 SVG，消除 /favicon.ico 404） -->
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📨</text></svg>" />
 
-  <!-- TailwindCSS：Play CDN（零构建，运行时联网加载） -->
-  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- TailwindCSS：本地 Play 运行时，避免生产运行时依赖外部 CDN -->
+  <script src="/static/vendor/tailwind-play.js"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -37,7 +37,7 @@
        从而 Alpine.store('confirm') 与 Alpine.data('toastHost') 能被正确注册。 -->
   <script defer src="/static/js/app.js"></script>
   <!-- Alpine.js：轻量交互（导航下拉、确认弹窗、toast 等） -->
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <script defer src="/static/vendor/alpine-3.14.1.min.js"></script>
   <style>[x-cloak]{display:none !important;}</style>
   {% block head_extra %}{% endblock %}
 </head>

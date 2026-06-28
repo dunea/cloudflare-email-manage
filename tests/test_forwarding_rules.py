@@ -120,6 +120,16 @@ async def _setup_email_address(client: AsyncClient, token: str) -> int:
 
     需在调用前完成 _patch_cf。
     """
+    _account_id, email_address_id = await _setup_email_address_with_account(
+        client, token
+    )
+    return email_address_id
+
+
+async def _setup_email_address_with_account(
+    client: AsyncClient, token: str
+) -> tuple[int, int]:
+    """绑定并同步域名、创建邮箱地址，返回账号 id 与邮箱地址 id。"""
     account_id = await _bind(client, token)
     sync = await client.post(
         f"/api/v1/cf-accounts/{account_id}/sync", headers=_auth(token)
@@ -130,7 +140,7 @@ async def _setup_email_address(client: AsyncClient, token: str) -> int:
         headers=_auth(token),
         json={"domain_id": domain_id, "local_part": "hello"},
     )
-    return created.json()["data"]["id"]
+    return account_id, created.json()["data"]["id"]
 
 
 def _mark_dest_verified(calls: _CFCalls, email: str) -> None:
@@ -287,6 +297,30 @@ async def test_create_unknown_destination_rejected(
     assert len(calls.created) == 0
 
 
+async def test_create_blocked_when_cf_account_inactive(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """停用 CF 账号后不能创建依赖 CF Token 的转发规则。"""
+    calls = _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    account_id, ea_id = await _setup_email_address_with_account(client, token)
+    _mark_dest_verified(calls, "dest@other.com")
+    await client.patch(
+        f"/api/v1/cf-accounts/{account_id}",
+        headers=_auth(token),
+        json={"is_active": False},
+    )
+
+    resp = await client.post(
+        "/api/v1/forwarding-rules",
+        headers=_auth(token),
+        json={"email_address_id": ea_id, "destination_email": "dest@other.com"},
+    )
+    assert resp.status_code == 403
+    assert "已停用" in resp.json()["message"]
+    assert len(calls.created) == 0
+
+
 # ---- 列表 / 详情 / 隔离 ----
 
 
@@ -401,7 +435,7 @@ async def test_access_isolation(
 async def test_update_forwarding_rule(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """更新转发规则的启用状态。"""
+    """停用删除远端 rule，重新启用时重建远端 rule。"""
     calls = _patch_cf(monkeypatch)
     token = await _register_and_login(client)
     ea_id = await _setup_email_address(client, token)
@@ -419,7 +453,22 @@ async def test_update_forwarding_rule(
         json={"is_active": False},
     )
     assert resp.status_code == 200
-    assert resp.json()["data"]["is_active"] is False
+    disabled = resp.json()["data"]
+    assert disabled["is_active"] is False
+    assert disabled["cf_rule_id"] is None
+    assert calls.deleted == [("zone1", "cf-rule-1")]
+
+    _mark_dest_verified(calls, "dest@other.com")
+    enabled = await client.patch(
+        f"/api/v1/forwarding-rules/{rule_id}",
+        headers=_auth(token),
+        json={"is_active": True},
+    )
+    assert enabled.status_code == 200
+    enabled_data = enabled.json()["data"]
+    assert enabled_data["is_active"] is True
+    assert enabled_data["cf_rule_id"] == "cf-rule-2"
+    assert len(calls.created) == 2
 
 
 async def test_delete_forwarding_rule(

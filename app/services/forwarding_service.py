@@ -32,12 +32,53 @@ async def _resolve_zone_and_client(
         raise NotFoundError("域名不存在")
     cf_account = (
         await session.execute(
-            select(CFAccount).where(CFAccount.id == domain.cf_account_id)
+            select(CFAccount).where(
+                CFAccount.id == domain.cf_account_id,
+                CFAccount.is_deleted.is_(False),
+            )
         )
     ).scalar_one_or_none()
     if cf_account is None:
         raise NotFoundError("CF 账号不存在")
     return domain.zone_id, build_client(cf_account)
+
+
+async def _resolve_rule_email_address(
+    session: AsyncSession, rule: ForwardingRule
+) -> EmailAddress:
+    """解析转发规则所属邮箱地址。"""
+    email_address = (
+        await session.execute(
+            select(EmailAddress).where(EmailAddress.id == rule.email_address_id)
+        )
+    ).scalar_one_or_none()
+    if email_address is None:
+        raise NotFoundError("邮箱地址不存在")
+    return email_address
+
+
+async def _resolve_rule_cf_account(
+    session: AsyncSession, email_address: EmailAddress
+) -> CFAccount:
+    """解析邮箱地址所属 CF 账号。"""
+    domain = (
+        await session.execute(
+            select(Domain).where(Domain.id == email_address.domain_id)
+        )
+    ).scalar_one_or_none()
+    if domain is None:
+        raise NotFoundError("域名不存在")
+    cf_account = (
+        await session.execute(
+            select(CFAccount).where(
+                CFAccount.id == domain.cf_account_id,
+                CFAccount.is_deleted.is_(False),
+            )
+        )
+    ).scalar_one_or_none()
+    if cf_account is None:
+        raise NotFoundError("CF 账号不存在")
+    return cf_account
 
 
 def _build_rule_payload(full_address: str, destination_email: str) -> dict[str, Any]:
@@ -48,6 +89,35 @@ def _build_rule_payload(full_address: str, destination_email: str) -> dict[str, 
         "enabled": True,
         "name": f"forward {full_address} -> {destination_email}",
     }
+
+
+async def _disable_remote_rule(
+    session: AsyncSession, rule: ForwardingRule
+) -> None:
+    """删除远端 CF rule，并清空本地 cf_rule_id。"""
+    if not rule.cf_rule_id:
+        return
+    email_address = await _resolve_rule_email_address(session, rule)
+    zone_id, client = await _resolve_zone_and_client(session, email_address)
+    await client.delete_routing_rule(zone_id, rule.cf_rule_id)
+    rule.cf_rule_id = None
+
+
+async def _enable_remote_rule(
+    session: AsyncSession, rule: ForwardingRule
+) -> None:
+    """重新校验目标地址并创建远端 CF rule。"""
+    email_address = await _resolve_rule_email_address(session, rule)
+    cf_account = await _resolve_rule_cf_account(session, email_address)
+    await destination_service.ensure_verified(
+        session, cf_account.id, rule.destination_email
+    )
+    zone_id, client = await _resolve_zone_and_client(session, email_address)
+    payload = _build_rule_payload(
+        email_address.full_address, rule.destination_email
+    )
+    result = await client.create_routing_rule(zone_id, payload)
+    rule.cf_rule_id = result.get("id") if isinstance(result, dict) else None
 
 
 def _accessible_rule_stmt(user: User) -> Select[tuple[ForwardingRule]]:
@@ -101,7 +171,10 @@ async def create_forwarding_rule(
         raise NotFoundError("域名不存在")
     cf_account = (
         await session.execute(
-            select(CFAccount).where(CFAccount.id == domain.cf_account_id)
+            select(CFAccount).where(
+                CFAccount.id == domain.cf_account_id,
+                CFAccount.is_deleted.is_(False),
+            )
         )
     ).scalar_one_or_none()
     if cf_account is None:
@@ -163,9 +236,14 @@ async def list_forwarding_rules(
 async def update_forwarding_rule(
     session: AsyncSession, rule: ForwardingRule, data: ForwardingRuleUpdate
 ) -> ForwardingRule:
-    """更新转发规则（目前支持启用/停用）。"""
-    if data.is_active is not None:
-        rule.is_active = data.is_active
+    """更新转发规则（启用/停用会同步远端 CF rule）。"""
+    if data.is_active is not None and data.is_active != rule.is_active:
+        if data.is_active:
+            await _enable_remote_rule(session, rule)
+            rule.is_active = True
+        else:
+            await _disable_remote_rule(session, rule)
+            rule.is_active = False
     await session.commit()
     await session.refresh(rule)
     return rule
@@ -175,17 +253,7 @@ async def delete_forwarding_rule(
     session: AsyncSession, rule: ForwardingRule
 ) -> None:
     """删除转发规则：先调用 CF 删除规则，再软删除本地记录。"""
-    if rule.cf_rule_id:
-        email_address = (
-            await session.execute(
-                select(EmailAddress).where(
-                    EmailAddress.id == rule.email_address_id
-                )
-            )
-        ).scalar_one_or_none()
-        if email_address is not None:
-            zone_id, client = await _resolve_zone_and_client(session, email_address)
-            await client.delete_routing_rule(zone_id, rule.cf_rule_id)
+    await _disable_remote_rule(session, rule)
 
     rule.is_deleted = True
     rule.is_active = False

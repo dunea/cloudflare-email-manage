@@ -41,7 +41,10 @@ async def _resolve_sender(
 
     cf_account = (
         await session.execute(
-            select(CFAccount).where(CFAccount.id == domain.cf_account_id)
+            select(CFAccount).where(
+                CFAccount.id == domain.cf_account_id,
+                CFAccount.is_deleted.is_(False),
+            )
         )
     ).scalar_one_or_none()
     if cf_account is None:

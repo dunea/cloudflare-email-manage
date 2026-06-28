@@ -74,6 +74,45 @@ def test_valid_production_config_passes() -> None:
     cfg.validate_for_startup()
 
 
+def test_trusted_proxy_headers_require_valid_proxy_list() -> None:
+    """生产环境启用代理头信任时必须配置合法可信代理列表。"""
+    cfg = Settings(
+        ENVIRONMENT="production",
+        SECRET_KEY="s" * 32,
+        CF_WEBHOOK_SECRET="w" * 32,
+        ADMIN_PASSWORD="change-me-securely",  # noqa: S106
+        APP_BASE_URL="https://example.com",
+        COOKIE_SECURE=True,
+        CSRF_PROTECTION=True,
+        DEBUG=False,
+        CF_FAKE_MODE=False,
+        TRUST_PROXY_HEADERS=True,
+        TRUSTED_PROXY_IPS="",
+    )
+
+    with pytest.raises(RuntimeError, match="TRUSTED_PROXY_IPS"):
+        cfg.validate_for_startup()
+
+
+def test_valid_trusted_proxy_config_passes() -> None:
+    """可信代理配置为合法 IP/CIDR 时允许生产启动。"""
+    cfg = Settings(
+        ENVIRONMENT="production",
+        SECRET_KEY="s" * 32,
+        CF_WEBHOOK_SECRET="w" * 32,
+        ADMIN_PASSWORD="change-me-securely",  # noqa: S106
+        APP_BASE_URL="https://example.com",
+        COOKIE_SECURE=True,
+        CSRF_PROTECTION=True,
+        DEBUG=False,
+        CF_FAKE_MODE=False,
+        TRUST_PROXY_HEADERS=True,
+        TRUSTED_PROXY_IPS="127.0.0.1,10.0.0.0/8",
+    )
+
+    cfg.validate_for_startup()
+
+
 async def test_production_web_post_requires_csrf(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

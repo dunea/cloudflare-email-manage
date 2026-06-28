@@ -55,7 +55,9 @@ async def create_api_key(
 ) -> Response:
     """创建 API Key，原始 key 暂存会话供下次列表页一次性展示。"""
     try:
-        data = APIKeyCreate(name=name)
+        form = await request.form()
+        scopes = [str(value) for value in form.getlist("scopes")]
+        data = APIKeyCreate(name=name, scopes=scopes)
         _, raw_key = await api_key_service.create_api_key(session, user, data)
     except (ValidationError, AppException) as exc:
         flash(request, error_message(exc), "error")

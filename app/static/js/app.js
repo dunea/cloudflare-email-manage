@@ -1,5 +1,5 @@
 // 前端少量交互辅助。Alpine.js 负责大部分页面内交互，此处仅放置可复用的工具函数：
-// 1) 复制到剪贴板；2) 全局 Toast 助手；3) 全局确认弹窗 Alpine store。
+// 1) 复制到剪贴板；2) 全局 Toast 助手；3) 防重复提交；4) 全局确认弹窗 Alpine store。
 
 // 复制文本到剪贴板（供 API Key 等一次性展示场景使用）。
 // 优先使用 Clipboard API（需安全上下文 HTTPS/localhost），
@@ -76,6 +76,40 @@ window.toast = function (message, category) {
   }
 };
 
+// POST 表单防重复提交：提交后禁用 submit 按钮并显示处理中状态。
+window.guardFormSubmit = function (form) {
+  if (!form || form.dataset.submitting === "true") {
+    return false;
+  }
+  form.dataset.submitting = "true";
+  form.setAttribute("aria-busy", "true");
+
+  const controls = form.querySelectorAll('button[type="submit"], input[type="submit"]');
+  controls.forEach((control) => {
+    control.disabled = true;
+    control.setAttribute("aria-disabled", "true");
+    const loadingText = control.dataset.loadingText || "处理中...";
+    if (control.tagName === "INPUT") {
+      control.dataset.originalValue = control.value;
+      control.value = loadingText;
+    } else {
+      control.dataset.originalText = control.textContent;
+      control.textContent = loadingText;
+    }
+  });
+  return true;
+};
+
+document.addEventListener("submit", (event) => {
+  if (event.defaultPrevented) return;
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement)) return;
+  if (form.method.toLowerCase() !== "post") return;
+  if (!window.guardFormSubmit(form)) {
+    event.preventDefault();
+  }
+});
+
 // 注册 Alpine 全局 store：统一的确认弹窗（替代浏览器原生 confirm）。
 // 用法：在表单上 `x-data @submit.prevent="$store.confirm.ask($el, '提示语')"`，
 // 用户点「确认」后以原生 form.submit() 提交（不再触发 @submit，避免二次拦截）。
@@ -95,7 +129,7 @@ document.addEventListener("alpine:init", () => {
       const form = this._form;
       this.open = false;
       this._form = null;
-      if (form) form.submit();
+      if (form && window.guardFormSubmit(form)) form.submit();
     },
     // 取消：仅关闭，不做任何操作
     no() {

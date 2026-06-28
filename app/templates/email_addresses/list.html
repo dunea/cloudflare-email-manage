@@ -92,7 +92,7 @@
 {% endif %}
 
 {% if addresses %}
-<div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+<div class="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm md:block">
   <table class="w-full text-sm">
     <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
       <tr>
@@ -150,6 +150,42 @@
       {% endfor %}
     </tbody>
   </table>
+</div>
+<div class="space-y-3 md:hidden">
+  {% for a in addresses %}
+  <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+    <div class="flex items-start justify-between gap-3">
+      <div class="min-w-0">
+        <p class="break-all font-mono text-sm font-semibold text-slate-800">{{ a.full_address }}</p>
+        <p class="mt-1 text-xs text-slate-400">{{ a.created_at | dt }}</p>
+      </div>
+      <div class="shrink-0">
+        {% if a.is_active %}{{ badge("启用", "green") }}{% else %}{{ badge("停用", "slate") }}{% endif %}
+      </div>
+    </div>
+    <div class="mt-4 grid grid-cols-2 gap-2 text-sm">
+      <a href="/mail/{{ a.public_token }}" target="_blank" rel="noopener noreferrer"
+         class="rounded-lg border border-slate-300 px-3 py-2 text-center font-medium text-slate-700">HTML</a>
+      <a href="/mail/{{ a.public_token }}.txt" target="_blank" rel="noopener noreferrer"
+         class="rounded-lg border border-slate-300 px-3 py-2 text-center font-medium text-slate-700">纯文本</a>
+      <form method="post" action="/email-addresses/{{ a.id }}/toggle">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <button type="submit" class="w-full rounded-lg border border-slate-300 px-3 py-2 font-medium text-brand">{{ "停用" if a.is_active else "启用" }}</button>
+      </form>
+      <form method="post" action="/email-addresses/{{ a.id }}/reset-token"
+            x-data @submit.prevent="$store.confirm.ask($el, '重置后旧查询链接立即失效，确定继续？')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <button type="submit" class="w-full rounded-lg border border-amber-300 px-3 py-2 font-medium text-amber-700">重置链接</button>
+      </form>
+      <form method="post" action="/email-addresses/{{ a.id }}/delete"
+            x-data @submit.prevent="$store.confirm.ask($el, '确定删除该邮箱地址？')"
+            class="col-span-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <button type="submit" class="w-full rounded-lg border border-red-200 px-3 py-2 font-medium text-red-600">删除</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
 </div>
 {{ pagination(page, size, total, "/email-addresses") }}
 
