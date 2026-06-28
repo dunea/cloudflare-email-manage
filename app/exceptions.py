@@ -65,8 +65,21 @@ class PermissionError(AppException):
 class CloudflareError(AppException):
     """调用 Cloudflare API 失败。"""
 
-    def __init__(self, message: str = "Cloudflare API 调用失败", code: int = 1502) -> None:
+    def __init__(
+        self,
+        message: str = "Cloudflare API 调用失败",
+        code: int = 1502,
+        *,
+        cf_method: str | None = None,
+        cf_path: str | None = None,
+        cf_status_code: int | None = None,
+        cf_errors: object | None = None,
+    ) -> None:
         super().__init__(message, code=code, http_status=status.HTTP_502_BAD_GATEWAY)
+        self.cf_method = cf_method
+        self.cf_path = cf_path
+        self.cf_status_code = cf_status_code
+        self.cf_errors = cf_errors
 
 
 def _error_response(code: int, message: str, http_status: int) -> JSONResponse:

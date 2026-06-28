@@ -170,6 +170,16 @@ def _has_marker(text: str, markers: tuple[str, ...]) -> bool:
     return any(marker in lowered for marker in markers)
 
 
+def _request_target(
+    method: str, path: str, params: dict[str, Any] | None = None
+) -> str:
+    """构造不含敏感信息的 CF 请求定位摘要。"""
+    target = f"{method.upper()} {path}"
+    if params:
+        target += f" params={params}"
+    return target
+
+
 def _has_error_source_pointer(body: object) -> bool:
     """Cloudflare schema 错误通常会带 source.pointer。"""
     if not isinstance(body, dict):
@@ -292,6 +302,7 @@ class CloudflareClient:
         json: dict[str, Any] | None = None,
     ) -> httpx.Response:
         """发起一次 HTTP 请求并返回原始响应，网络异常转为 CloudflareError。"""
+        target = _request_target(method, path, params)
         async with httpx.AsyncClient(
             base_url=self._base_url,
             timeout=_DEFAULT_TIMEOUT,
@@ -302,7 +313,11 @@ class CloudflareClient:
                     method, path, params=params, json=json, headers=self._headers()
                 )
             except httpx.HTTPError as exc:
-                raise CloudflareError(f"调用 Cloudflare API 失败: {exc}") from exc
+                raise CloudflareError(
+                    f"调用 Cloudflare API 失败 ({target}): {exc}",
+                    cf_method=method.upper(),
+                    cf_path=path,
+                ) from exc
 
     async def _request(
         self,
@@ -318,12 +333,24 @@ class CloudflareClient:
             body = resp.json()
         except ValueError as exc:
             raise CloudflareError(
-                f"Cloudflare API 返回非 JSON 响应 (HTTP {resp.status_code})"
+                "Cloudflare API 返回非 JSON 响应 "
+                f"(HTTP {resp.status_code}; {_request_target(method, path, params)})",
+                cf_method=method.upper(),
+                cf_path=path,
+                cf_status_code=resp.status_code,
             ) from exc
 
         if not isinstance(body, dict) or not body.get("success", False):
             errors = body.get("errors") if isinstance(body, dict) else None
-            raise CloudflareError(f"Cloudflare API 返回失败: {errors or body}")
+            raise CloudflareError(
+                "Cloudflare API 返回失败 "
+                f"(HTTP {resp.status_code}; {_request_target(method, path, params)}): "
+                f"{errors or body}",
+                cf_method=method.upper(),
+                cf_path=path,
+                cf_status_code=resp.status_code,
+                cf_errors=errors or body,
+            )
         return body.get("result")
 
     async def _run_invalid_write_probe(
@@ -343,7 +370,10 @@ class CloudflareClient:
         except ValueError as exc:
             raise CloudflareError(
                 f"{capability_label}权限探测失败：Cloudflare 返回非 JSON 响应 "
-                f"(HTTP {resp.status_code})"
+                f"(HTTP {resp.status_code}; {_request_target(method, path)})",
+                cf_method=method.upper(),
+                cf_path=path,
+                cf_status_code=resp.status_code,
             ) from exc
 
         decision = _classify_write_probe_response(
@@ -355,7 +385,11 @@ class CloudflareClient:
         if not decision.passed:
             raise CloudflareError(
                 f"{capability_label}权限探测失败：{decision.reason} "
-                f"(HTTP {resp.status_code}): {body}"
+                f"(HTTP {resp.status_code}; {_request_target(method, path)}): {body}",
+                cf_method=method.upper(),
+                cf_path=path,
+                cf_status_code=resp.status_code,
+                cf_errors=body,
             )
         return {"status": "ok"}
 
@@ -782,28 +816,44 @@ class CloudflareClient:
             timeout=_DEFAULT_TIMEOUT,
             transport=self._transport,
         ) as client:
+            path = f"/accounts/{account_id}/workers/scripts/{script_name}"
             try:
                 resp = await client.put(
-                    f"/accounts/{account_id}/workers/scripts/{script_name}",
+                    path,
                     files=files,
                     headers={
                         "Authorization": f"Bearer {self._api_token}",
                     },
                 )
             except httpx.HTTPError as exc:
-                raise CloudflareError(f"调用 Cloudflare API 失败: {exc}") from exc
+                raise CloudflareError(
+                    f"调用 Cloudflare API 失败 ({_request_target('PUT', path)}): {exc}",
+                    cf_method="PUT",
+                    cf_path=path,
+                ) from exc
 
         if resp.status_code >= 400:
             raise CloudflareError(
-                f"Cloudflare Worker 部署失败 (HTTP {resp.status_code}): {resp.text}"
+                "Cloudflare Worker 部署失败 "
+                f"(HTTP {resp.status_code}; {_request_target('PUT', path)}): {resp.text}",
+                cf_method="PUT",
+                cf_path=path,
+                cf_status_code=resp.status_code,
             )
         try:
             body = resp.json()
         except ValueError:
             body = {}
         if isinstance(body, dict) and body.get("success") is False:
+            errors = body.get("errors")
             raise CloudflareError(
-                f"Cloudflare Worker 部署失败: {body.get('errors') or body}"
+                f"Cloudflare Worker 部署失败 "
+                f"(HTTP {resp.status_code}; {_request_target('PUT', path)}): "
+                f"{errors or body}",
+                cf_method="PUT",
+                cf_path=path,
+                cf_status_code=resp.status_code,
+                cf_errors=errors or body,
             )
         # 标准 CF 信封返回 result 字段；非标准则原样转换为 WorkerUploadResult
         if isinstance(body, dict) and "result" in body:

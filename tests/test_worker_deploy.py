@@ -92,6 +92,8 @@ def _patch_deploy_ok(
     monkeypatch: pytest.MonkeyPatch,
     *,
     upload_should_fail: Exception | None = None,
+    secret_should_fail: Exception | None = None,
+    catch_all_should_fail: Exception | None = None,
 ) -> dict[str, object]:
     """patch 所有 deploy 链路上的 CF 调用；可选择让 upload 失败。"""
     captured: dict[str, object] = {
@@ -99,6 +101,7 @@ def _patch_deploy_ok(
         "secret_calls": 0,
         "catch_all_calls": [],
         "enable_calls": [],
+        "list_zones_account_ids": [],
     }
 
     async def _verify(self: CloudflareClient) -> dict[str, str]:
@@ -107,10 +110,25 @@ def _patch_deploy_ok(
     async def _list_zones(
         self: CloudflareClient, account_id: str | None = None
     ) -> list[dict[str, object]]:
+        account_ids = captured["list_zones_account_ids"]
+        assert isinstance(account_ids, list)
+        account_ids.append(account_id)
         return [
             {
                 "id": "z1",
                 "name": "a.com",
+                "status": "active",
+                "account": {"id": account_id or "acc-1", "name": "test"},
+            },
+            {
+                "id": "z2",
+                "name": "b.com",
+                "status": "active",
+                "account": {"id": account_id or "acc-1", "name": "test"},
+            },
+            {
+                "id": "zone-a",
+                "name": "example.com",
                 "status": "active",
                 "account": {"id": account_id or "acc-1", "name": "test"},
             }
@@ -188,6 +206,8 @@ def _patch_deploy_ok(
         assert isinstance(cnt, int)
         captured["secret_calls"] = cnt + 1
         captured["last_secret_json"] = secret_value
+        if secret_should_fail is not None:
+            raise secret_should_fail
         return {"name": secret_name}
 
     async def _catch_all(
@@ -196,6 +216,8 @@ def _patch_deploy_ok(
         calls = captured["catch_all_calls"]
         assert isinstance(calls, list)
         calls.append((zone_id, worker_name))
+        if catch_all_should_fail is not None:
+            raise catch_all_should_fail
         return {"enabled": True, "actions": [{"type": "worker", "value": [worker_name]}]}
 
     monkeypatch.setattr(CloudflareClient, "verify_token", _verify)
@@ -350,6 +372,104 @@ async def test_deploy_permission_precheck_failure_does_not_upload(
     assert cap["upload_calls"] == 0
     assert cap["secret_calls"] == 0
     assert cap["catch_all_calls"] == []
+
+
+async def test_deploy_rejects_local_domain_outside_bound_account(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """本地旧域名不属于当前 Account 时，部署前失败且不写 CF。"""
+    _user, cf_account, _ = await _make_user_with_account_and_domains(
+        db_session, domains=[("z1", "a.com"), ("z-stale", "old.com")]
+    )
+    cap = _patch_deploy_ok(monkeypatch)
+
+    with pytest.raises(AppException) as ei:
+        await worker_deploy_service.deploy_worker_for_account(db_session, cf_account)
+
+    assert "本地域名与当前 Cloudflare Account 不一致" in ei.value.message
+    assert "old.com" in ei.value.message
+    assert cap["upload_calls"] == 0
+    assert cap["secret_calls"] == 0
+    assert cap["catch_all_calls"] == []
+
+
+async def test_deploy_secret_failure_wraps_stage_and_cf_summary(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """设置 Worker Secret 失败时，用户提示和日志都包含定位上下文。"""
+    from app.exceptions import CloudflareError
+
+    _user, cf_account, _ = await _make_user_with_account_and_domains(
+        db_session, domains=[("z1", "a.com")]
+    )
+    logged: dict[str, object] = {}
+
+    def _capture_log(message: str, *args: object, **kwargs: object) -> None:
+        logged["message"] = message
+        logged["args"] = args
+        logged["kwargs"] = kwargs
+
+    monkeypatch.setattr(worker_deploy_service.logger, "exception", _capture_log)
+    _patch_deploy_ok(
+        monkeypatch,
+        secret_should_fail=CloudflareError(
+            "Cloudflare API 返回失败 (HTTP 403; PUT "
+            "/accounts/acc-1/workers/scripts/cf-email-manager-webhook/secrets): "
+            "[{'code': 10000, 'message': 'Authentication error'}]",
+            cf_method="PUT",
+            cf_path="/accounts/acc-1/workers/scripts/cf-email-manager-webhook/secrets",
+            cf_status_code=403,
+            cf_errors=[{"code": 10000, "message": "Authentication error"}],
+        ),
+    )
+
+    with pytest.raises(AppException) as ei:
+        await worker_deploy_service.deploy_worker_for_account(db_session, cf_account)
+
+    assert "设置 Worker Secret 失败" in ei.value.message
+    assert "10000" in ei.value.message
+    assert "Authentication error" in ei.value.message
+    message = str(logged.get("message", ""))
+    args = logged.get("args", ())
+    assert isinstance(args, tuple)
+    log_text = message % args
+    assert "method=PUT" in log_text
+    assert "PUT" in log_text
+    assert "/workers/scripts/cf-email-manager-webhook/secrets" in log_text
+    assert "account_id=acc-1" in log_text
+    assert "WEBHOOK_SECRETS" not in log_text
+    assert "init-secret" not in log_text
+
+
+async def test_deploy_catch_all_failure_wraps_domain_and_zone(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """配置 catch-all 失败时，提示包含具体域名与 zone_id。"""
+    from app.exceptions import CloudflareError
+
+    _user, cf_account, _ = await _make_user_with_account_and_domains(
+        db_session, domains=[("z1", "a.com")]
+    )
+    _patch_deploy_ok(
+        monkeypatch,
+        catch_all_should_fail=CloudflareError(
+            "Cloudflare API 返回失败 (HTTP 403; PUT "
+            "/zones/z1/email/routing/rules/catch_all): "
+            "[{'code': 10000, 'message': 'Authentication error'}]",
+            cf_method="PUT",
+            cf_path="/zones/z1/email/routing/rules/catch_all",
+            cf_status_code=403,
+            cf_errors=[{"code": 10000, "message": "Authentication error"}],
+        ),
+    )
+
+    with pytest.raises(AppException) as ei:
+        await worker_deploy_service.deploy_worker_for_account(db_session, cf_account)
+
+    assert "配置 a.com catch-all 失败" in ei.value.message
+    assert "zone_id=z1" in ei.value.message
+    assert "10000" in ei.value.message
 
 
 async def test_deploy_email_routing_enabled_when_disabled(
