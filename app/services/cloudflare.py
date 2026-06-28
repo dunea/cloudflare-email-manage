@@ -531,11 +531,11 @@ class CloudflareClient:
         )
 
     async def enable_email_routing(self, zone_id: str) -> EmailRoutingStatus:
-        """启用 Zone 的 Email Routing（POST .../email/routing/enable）。"""
+        """启用 Zone 的 Email Routing DNS 设置（POST .../email/routing/dns）。"""
         if settings.CF_FAKE_MODE:
             return {"enabled": True, "status": "ready"}
         result = await self._request(
-            "POST", f"/zones/{zone_id}/email/routing/enable"
+            "POST", f"/zones/{zone_id}/email/routing/dns"
         )
         if not isinstance(result, dict):
             return {"enabled": True}

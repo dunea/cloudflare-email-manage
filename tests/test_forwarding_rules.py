@@ -93,6 +93,11 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> _CFCalls:
     ) -> dict[str, Any]:
         return {"id": f"cf-dest-{email}", "email": email, "verified": None}
 
+    async def _fake_get_email_routing_status(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, object]:
+        return {"enabled": True, "status": "ready"}
+
     async def _fake_list_email_sending(
         self: CloudflareClient, zone_id: str
     ) -> list[dict[str, Any]]:
@@ -128,6 +133,9 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> _CFCalls:
     )
     monkeypatch.setattr(
         CloudflareClient, "create_destination_address", _fake_create_dest
+    )
+    monkeypatch.setattr(
+        CloudflareClient, "get_email_routing_status", _fake_get_email_routing_status
     )
     monkeypatch.setattr(
         CloudflareClient, "list_email_sending_subdomains", _fake_list_email_sending

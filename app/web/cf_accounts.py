@@ -36,10 +36,13 @@ TOKEN_PERMISSIONS = [
 ]
 
 TOKEN_SETUP_NOTES = [
+    "Cloudflare 权限编辑器需要分别添加「整个账户」和「所有域名」两组策略。",
+    "整个账户权限只需要 Workers Scripts、Email Routing Addresses、Email Sending 的 Edit。",
+    "所有域名权限需要 Zone 的 Read，以及 Zone Settings、Email Routing Rules 的 Edit。",
+    "Workers Routes、Cloud Email Security、Email Routing Suppressions 当前不是必需权限。",
     "Token 资源范围必须覆盖要接入的 Account 和至少一个 Zone。",
     "API Token 输入框只填写原始 Token，不要包含 Bearer 前缀。",
     "如果 Token 配置了来源 IP 限制，请放行本服务的公网出口 IP。",
-    "Workers Scripts 编辑权限是必需项；没有该权限无法部署收件 Worker，也无法完整收发邮件。",
 ]
 
 
@@ -67,6 +70,40 @@ def _capability_report_from_exception(
     else:
         dumped = jsonable_encoder(report)
     return dumped if isinstance(dumped, dict) else {}
+
+
+def _compact_deploy_error_message(exc: AppException) -> str:
+    """Web toast 使用短错误；详细 Cloudflare path/code 留在 API 响应和日志中。"""
+    if isinstance(exc, CFPermissionPrecheckError):
+        report = _capability_report_from_exception(exc)
+        for item in report.get("items", []):
+            if isinstance(item, dict) and item.get("key") == "email_routing_settings":
+                item_text = f"{item.get('message', '')} {item.get('fix_hint', '')}"
+                if "暂时" in item_text or "非 JSON" in item_text or "未兼容" in item_text:
+                    return (
+                        "部署 Worker 失败：暂时无法确认 Email Routing 设置权限。"
+                        "请稍后重试，或查看权限预检结果。"
+                    )
+                return (
+                    "部署 Worker 失败：Token 缺少 Zone Settings 权限。"
+                    "请在 Cloudflare Token 的所有域名权限中添加 Zone Settings: Edit，"
+                    "然后重新检查权限。"
+                )
+    message = error_message(exc)
+    if not message.startswith("部署 Worker 失败"):
+        return message
+    marker = "查询/启用 Email Routing 失败："
+    if marker in message:
+        domain = message.split(marker, 1)[1].split("。", 1)[0].strip()
+        if domain:
+            return (
+                f"部署 Worker 失败：{domain} 的 Email Routing 设置不可访问。"
+                "请在 Cloudflare Token 的所有域名权限中添加 Zone Settings: Edit，"
+                "然后重新检查权限。"
+            )
+    if "Cloudflare 摘要：" in message:
+        return message.split("Cloudflare 摘要：", 1)[0].strip()
+    return message if len(message) <= 180 else f"{message[:177]}..."
 
 
 @router.get("/cf-accounts")
@@ -262,7 +299,7 @@ async def deploy_worker(
             session, account
         )
     except AppException as exc:
-        flash(request, error_message(exc), "error")
+        flash(request, _compact_deploy_error_message(exc), "error")
         return RedirectResponse(f"/cf-accounts/{account_id}", status_code=303)
     flash(
         request,

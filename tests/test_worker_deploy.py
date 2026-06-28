@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.models  # noqa: F401  确保模型注册
 from app.config import settings
-from app.exceptions import AppException
+from app.exceptions import AppException, CFPermissionPrecheckError
 from app.models import CFAccount, Domain, User
 from app.services import worker_deploy_service
 from app.services.cloudflare import CloudflareClient
@@ -374,6 +374,49 @@ async def test_deploy_permission_precheck_failure_does_not_upload(
     assert cap["catch_all_calls"] == []
 
 
+async def test_deploy_email_routing_settings_precheck_failure_does_not_upload(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """部署前缺少 Zone Settings 时，不上传 Worker、不写 secret、不改 catch-all。"""
+    from app.exceptions import CloudflareError
+
+    _user, cf_account, _ = await _make_user_with_account_and_domains(
+        db_session, domains=[("z1", "a.com")]
+    )
+    cap = _patch_deploy_ok(monkeypatch)
+
+    async def _routing_settings_forbidden(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, object]:
+        raise CloudflareError(
+            "Cloudflare API 返回失败 (HTTP 403; GET "
+            f"/zones/{zone_id}/email/routing): "
+            "[{'code': 10000, 'message': 'Authentication error'}]",
+            cf_method="GET",
+            cf_path=f"/zones/{zone_id}/email/routing",
+            cf_status_code=403,
+            cf_errors=[{"code": 10000, "message": "Authentication error"}],
+        )
+
+    monkeypatch.setattr(
+        CloudflareClient, "get_email_routing_status", _routing_settings_forbidden
+    )
+
+    with pytest.raises(AppException) as ei:
+        await worker_deploy_service.deploy_worker_for_account(db_session, cf_account)
+
+    assert "Email Routing 设置" in ei.value.message
+    assert isinstance(ei.value, CFPermissionPrecheckError)
+    report = ei.value.report
+    item = [
+        item for item in report.items if item.key == "email_routing_settings"
+    ][0]
+    assert "Zone Settings" in item.fix_hint
+    assert cap["upload_calls"] == 0
+    assert cap["secret_calls"] == 0
+    assert cap["catch_all_calls"] == []
+
+
 async def test_deploy_rejects_local_domain_outside_bound_account(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -626,6 +669,73 @@ async def test_web_deploy_worker_form_success(
     )
     assert resp.status_code == 303
     assert f"/cf-accounts/{cf_account.id}" in resp.headers["location"]
+
+
+async def test_web_deploy_worker_zone_settings_error_uses_short_flash(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Web 一键部署遇到 Zone Settings 缺失时，toast 不展示冗长 CF path。"""
+    from app.exceptions import CloudflareError
+
+    cap = _patch_deploy_ok(monkeypatch)
+    await client.post(
+        "/register",
+        data={"username": "webfail", "email": "fail@x.com", "password": "p123456"},
+    )
+    await client.post("/login", data={"username": "webfail", "password": "p123456"})
+
+    from sqlalchemy import select as _sel
+
+    user = (
+        await db_session.execute(_sel(User).where(User.username == "webfail"))
+    ).scalar_one()
+    cf_account = CFAccount(
+        user_id=user.id,
+        name="t",
+        encrypted_api_token=encrypt_token("tok"),
+        account_id="acc-1",
+    )
+    db_session.add(cf_account)
+    await db_session.flush()
+    db_session.add(
+        Domain(
+            cf_account_id=cf_account.id,
+            zone_id="z1",
+            domain_name="a.com",
+            status="active",
+            webhook_secret="s",
+        )
+    )
+    await db_session.commit()
+
+    async def _routing_settings_forbidden(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, object]:
+        raise CloudflareError(
+            "Cloudflare API 返回失败 (HTTP 403; GET "
+            f"/zones/{zone_id}/email/routing): "
+            "[{'code': 10000, 'message': 'Authentication error'}]",
+            cf_method="GET",
+            cf_path=f"/zones/{zone_id}/email/routing",
+            cf_status_code=403,
+            cf_errors=[{"code": 10000, "message": "Authentication error"}],
+        )
+
+    monkeypatch.setattr(
+        CloudflareClient, "get_email_routing_status", _routing_settings_forbidden
+    )
+
+    resp = await client.post(
+        f"/cf-accounts/{cf_account.id}/deploy-worker",
+        follow_redirects=True,
+    )
+
+    assert resp.status_code == 200
+    assert "部署 Worker 失败：Token 缺少 Zone Settings 权限" in resp.text
+    assert "Cloudflare API 返回失败 (HTTP 403; GET" not in resp.text
+    assert cap["upload_calls"] == 0
 
 
 # ---- APP_BASE_URL 校验 ----

@@ -50,40 +50,54 @@ TOKEN_REQUIREMENT = PermissionRequirement(
 ZONE_REQUIREMENT = PermissionRequirement(
     key="zone_read",
     label="域名读取",
-    required_permission="Zone:Zone:Read",
-    fix_hint="创建 Token 时在 Zone 资源范围中选择需要接入的域名，并授予 Zone:Zone:Read。",
+    required_permission="Zone:Zone:Read / Zone Read",
+    fix_hint="在所有域名或指定域名权限中添加 Zone 读取权限，并确保资源范围覆盖要接入的域名。",
+)
+
+EMAIL_ROUTING_SETTINGS_REQUIREMENT = PermissionRequirement(
+    key="email_routing_settings",
+    label="Email Routing 设置",
+    required_permission="Zone:Zone Settings:Edit / Zone Settings Write",
+    fix_hint=(
+        "在所有域名或指定域名权限中添加 Zone Settings 编辑权限；"
+        "一键部署需要读取并启用 Email Routing 状态。"
+    ),
 )
 
 EMAIL_ROUTING_REQUIREMENT = PermissionRequirement(
     key="email_routing",
     label="Email Routing 规则",
-    required_permission="Zone:Email Routing:Edit / Email Routing Rules Write",
-    fix_hint="为所有接入域名授予 Email Routing 编辑权限，用于创建邮箱路由和 catch-all。",
+    required_permission="Zone:Email Routing Rules:Edit / Email Routing Rules Write",
+    fix_hint=(
+        "在所有域名或指定域名权限中添加 Email Routing Rules 编辑权限，"
+        "用于创建邮箱路由和 catch-all。"
+    ),
 )
 
 DESTINATION_ADDRESS_REQUIREMENT = PermissionRequirement(
     key="routing_addresses",
     label="转发目标地址",
-    required_permission="Account:Email Routing Addresses:Edit",
-    fix_hint="在 Account 权限中添加 Email Routing Addresses 编辑权限。",
+    required_permission="Account:Email Routing Addresses:Edit / Email Routing Addresses Write",
+    fix_hint="在整个账户权限中添加 Email Routing Addresses 编辑权限。",
 )
 
 EMAIL_SENDING_REQUIREMENT = PermissionRequirement(
     key="email_sending",
     label="Email Sending 发件",
-    required_permission="Account:Email Send:Edit / Email Sending Write",
-    fix_hint="在 Account 权限中添加 Email Sending 发件权限，并确认域名已启用 Email Sending。",
+    required_permission="Account:Email Sending:Edit / Email Sending Write",
+    fix_hint="在整个账户权限中添加 Email Sending 编辑权限，并确认域名已启用 Email Sending。",
 )
 
 WORKERS_REQUIREMENT = PermissionRequirement(
     key="workers_scripts",
     label="Workers 脚本",
     required_permission="Account:Workers Scripts:Edit / Workers Scripts Write",
-    fix_hint="在 Account 权限中添加 Workers Scripts 编辑权限，否则无法一键部署收件 Worker。",
+    fix_hint="在整个账户权限中添加 Workers Scripts 编辑权限，否则无法一键部署收件 Worker。",
 )
 
 REQUIRED_TOKEN_PERMISSIONS: tuple[PermissionRequirement, ...] = (
     ZONE_REQUIREMENT,
+    EMAIL_ROUTING_SETTINGS_REQUIREMENT,
     EMAIL_ROUTING_REQUIREMENT,
     DESTINATION_ADDRESS_REQUIREMENT,
     EMAIL_SENDING_REQUIREMENT,
@@ -135,6 +149,15 @@ def _classify_cf_error(exc: CloudflareError) -> str:
     """将 Cloudflare 原始错误转成用户能行动的中文说明。"""
     raw = str(exc)
     lowered = raw.lower()
+    path = (exc.cf_path or "").lower()
+    is_auth_or_permission = (
+        "10000" in raw
+        or "authentication error" in lowered
+        or "401" in raw
+        or "403" in raw
+        or "permission" in lowered
+        or "unauthorized" in lowered
+    )
     if "暂时无法完成权限探测" in raw or "http 429" in lowered or "(http 5" in lowered:
         return "Cloudflare 暂时无法完成权限探测，请稍后重试。"
     if "返回非 json 响应" in lowered:
@@ -154,6 +177,16 @@ def _classify_cf_error(exc: CloudflareError) -> str:
         return (
             "新 Token 属于或覆盖的是另一个 Cloudflare Account；"
             "请为当前 Account 重新创建 Token，或新增绑定账号。"
+        )
+    if (
+        is_auth_or_permission
+        and "/email/routing" in path
+        and "/rules" not in path
+        and "/addresses" not in path
+    ):
+        return (
+            "当前 Token 无法读取或启用该域名的 Email Routing 设置。"
+            "通常是缺少 Zone Settings 权限，或 Zone 资源范围未覆盖该域名。"
         )
     if "10000" in raw or "authentication error" in lowered or "401" in raw:
         return (
@@ -287,6 +320,19 @@ async def _check_email_routing_rules_write(
     await client.probe_email_routing_rules_write(zone_id)
 
 
+async def _check_email_routing_settings_for_zones(
+    client: CloudflareClient, zones: list[dict[str, object]]
+) -> None:
+    """检查所有可访问 Zone 的 Email Routing 设置读取能力。"""
+    for zone in zones:
+        zone_id = str(zone.get("id") or "")
+        if not zone_id:
+            raise CloudflareError(
+                "Cloudflare Zone 响应缺少 zone_id，无法确认 Email Routing 设置权限。"
+            )
+        await client.get_email_routing_status(zone_id)
+
+
 async def _check_destination_addresses_write(
     client: CloudflareClient, account_id: str
 ) -> None:
@@ -398,6 +444,12 @@ async def inspect_token_permissions(
             "passed",
             f"已读取到 {len(zones)} 个可访问域名。",
         )
+    )
+    await _add_cloudflare_check(
+        items,
+        EMAIL_ROUTING_SETTINGS_REQUIREMENT,
+        lambda: _check_email_routing_settings_for_zones(client, zones),
+        f"已通过 {len(zones)} 个域名的 Email Routing 设置读取权限探测。",
     )
     await _add_cloudflare_check(
         items,

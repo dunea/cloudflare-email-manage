@@ -11,8 +11,8 @@
 {% for f in flashes %}
 <div x-data="{ show: true }" x-show="show" x-transition.opacity
      {% if f.category in ['success', 'info'] %}x-init="setTimeout(() => show = false, 6000)"{% endif %}
-     class="pointer-events-auto flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-sm shadow-lg {{ styles.get(f.category, styles['info']) }}">
-  <span>{{ f.message }}</span>
+     class="pointer-events-auto flex max-h-72 items-start justify-between gap-3 overflow-y-auto rounded-lg border px-4 py-3 text-sm shadow-lg {{ styles.get(f.category, styles['info']) }}">
+  <span class="min-w-0 whitespace-pre-wrap break-words leading-5">{{ f.message }}</span>
   <button type="button" @click="show = false" class="shrink-0 opacity-60 hover:opacity-100">✕</button>
 </div>
 {% endfor %}

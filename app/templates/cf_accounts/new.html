@@ -36,7 +36,7 @@
     <ul class="mt-3 space-y-2">
       {% for perm, label, desc in permissions %}
       <li>
-        <code class="rounded bg-white px-1.5 py-0.5 text-xs text-slate-700 ring-1 ring-slate-200">{{ perm }}</code>
+        <code class="break-all rounded bg-white px-1.5 py-0.5 text-xs text-slate-700 ring-1 ring-slate-200">{{ perm }}</code>
         <span class="ml-1 text-slate-700">{{ label }}</span>
         <p class="mt-1 text-xs text-slate-500">{{ desc }}</p>
       </li>
@@ -66,7 +66,7 @@
       <p class="mt-2 text-sm text-slate-600">{{ item.message }}</p>
       {% if item.status != 'passed' %}
       <p class="mt-2 text-xs text-red-700">修复建议：{{ item.fix_hint }}</p>
-      <p class="mt-1 text-xs text-slate-500">需要权限：<code class="font-mono">{{ item.required_permission }}</code></p>
+      <p class="mt-1 text-xs text-slate-500">需要权限：<code class="break-all font-mono">{{ item.required_permission }}</code></p>
       {% endif %}
     </div>
     {% endfor %}

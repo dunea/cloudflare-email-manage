@@ -59,6 +59,11 @@ def _patch_verify_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     ) -> list[dict[str, object]]:
         return []
 
+    async def _get_email_routing_status(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, object]:
+        return {"enabled": True, "status": "ready"}
+
     async def _list_email_sending(
         self: CloudflareClient, zone_id: str
     ) -> list[dict[str, object]]:
@@ -89,6 +94,9 @@ def _patch_verify_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(CloudflareClient, "list_zones", _list_zones)
     monkeypatch.setattr(CloudflareClient, "list_routing_rules", _list_routing_rules)
     monkeypatch.setattr(CloudflareClient, "list_destination_addresses", _list_destinations)
+    monkeypatch.setattr(
+        CloudflareClient, "get_email_routing_status", _get_email_routing_status
+    )
     monkeypatch.setattr(
         CloudflareClient, "list_email_sending_subdomains", _list_email_sending
     )
@@ -159,6 +167,21 @@ async def test_dashboard_renders_stats(client: AsyncClient) -> None:
     resp = await client.get("/dashboard")
     assert resp.status_code == 200
     assert "最近收件" in resp.text
+
+
+async def test_new_cf_account_shows_current_permission_guidance(
+    client: AsyncClient,
+) -> None:
+    """绑定页按 Cloudflare 当前 UI 区分整个账户与所有域名权限。"""
+    await _web_login(client)
+    resp = await client.get("/cf-accounts/new")
+    assert resp.status_code == 200
+    assert "整个账户" in resp.text
+    assert "所有域名" in resp.text
+    assert "Zone Settings" in resp.text
+    assert "Email Routing Rules" in resp.text
+    assert "Workers Routes" in resp.text
+    assert "当前不是必需权限" in resp.text
 
 
 async def test_bind_cf_account_success(
