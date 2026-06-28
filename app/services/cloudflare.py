@@ -11,6 +11,7 @@ Email Routing（转发规则 / 目标地址）、Email Sending（Beta）。
 from __future__ import annotations
 
 import json
+import secrets
 from dataclasses import dataclass
 from typing import Any, NotRequired, TypedDict
 
@@ -148,13 +149,11 @@ _VALIDATION_MARKERS = (
 _WORKERS_SCRIPT_NOT_FOUND_MARKERS = (
     "script not found",
     "script_not_found",
-    "not_found",
     "no such script",
     "could not find script",
     "workers script not found",
     "worker script not found",
-    "does not exist",
-    "not exist",
+    "worker does not exist",
 )
 
 
@@ -721,7 +720,9 @@ class CloudflareClient:
         if settings.CF_FAKE_MODE:
             return {"status": "ok"}
 
-        probe_script = "cf-email-manager-permission-probe-never-create"
+        probe_script = (
+            "cf-email-manager-permission-probe-" f"{secrets.token_hex(16)}"
+        )
         return await self._run_invalid_write_probe(
             "PUT",
             f"/accounts/{account_id}/workers/scripts/{probe_script}/secrets",

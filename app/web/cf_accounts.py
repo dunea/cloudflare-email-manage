@@ -6,6 +6,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Form, Query, Request, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import RedirectResponse
 from pydantic import ValidationError
 
@@ -57,7 +58,15 @@ def _capability_report_from_exception(
     exc: CFPermissionPrecheckError,
 ) -> dict[str, object]:
     """从业务异常中提取权限检查报告。"""
-    return exc.report.model_dump(mode="json")
+    report = exc.report
+    if isinstance(report, dict):
+        return report
+    model_dump = getattr(report, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump(mode="json")
+    else:
+        dumped = jsonable_encoder(report)
+    return dumped if isinstance(dumped, dict) else {}
 
 
 @router.get("/cf-accounts")

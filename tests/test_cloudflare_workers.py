@@ -125,10 +125,17 @@ async def test_probe_worker_scripts_write_accepts_validation_error() -> None:
     assert captured["method"] == "PUT"
     url = captured["url"]
     assert isinstance(url, str)
-    assert url.endswith(
-        "/accounts/acc1/workers/scripts/"
-        "cf-email-manager-permission-probe-never-create/secrets"
+    script_prefix = (
+        "https://api.cloudflare.com/client/v4/accounts/acc1/workers/scripts/"
+        "cf-email-manager-permission-probe-"
     )
+    assert url.startswith(script_prefix)
+    assert url.endswith("/secrets")
+    script_name = url.rsplit("/workers/scripts/", 1)[1].removesuffix("/secrets")
+    assert script_name != "cf-email-manager-permission-probe-never-create"
+    hex_suffix = script_name.removeprefix("cf-email-manager-permission-probe-")
+    assert len(hex_suffix) == 32
+    int(hex_suffix, 16)
     assert captured["body"] == {
         "name": "CF_EMAIL_MANAGER_PERMISSION_PROBE",
         "text": "probe",
@@ -187,6 +194,29 @@ async def test_probe_worker_scripts_write_accepts_not_found_variants() -> None:
     cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
     result = await cf.probe_worker_scripts_write("acc1")
     assert result["status"] == "ok"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"code": "not_found", "message": "resource not found"},
+        {"code": 10021, "message": "resource does not exist"},
+    ],
+)
+async def test_probe_worker_scripts_write_rejects_generic_not_found(
+    error: dict[str, object],
+) -> None:
+    """泛化 not found 不能被误判为 Workers 脚本写权限已通过。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={"success": False, "errors": [error]},
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    with pytest.raises(CloudflareError, match="暂未兼容"):
+        await cf.probe_worker_scripts_write("acc1")
 
 
 @pytest.mark.parametrize("status_code", [429, 500, 503])

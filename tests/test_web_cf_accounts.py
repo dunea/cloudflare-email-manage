@@ -8,10 +8,11 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.exceptions import CloudflareError
+from app.exceptions import CFPermissionPrecheckError, CloudflareError
 from app.models import CFAccount
 from app.services.cloudflare import CloudflareClient
 from app.services.crypto import decrypt_token
+from app.web.cf_accounts import _capability_report_from_exception
 from app.web.templating import _format_dt
 
 
@@ -279,6 +280,21 @@ async def test_format_dt_accepts_iso_string() -> None:
     """模板 dt 过滤器可格式化从 JSON 报告中取出的 ISO 时间字符串。"""
     assert _format_dt("2026-06-28T13:56:01+00:00") == "2026-06-28 13:56"
     assert _format_dt("2026-06-28T13:56:01Z") == "2026-06-28 13:56"
+
+
+def test_capability_report_from_exception_accepts_dict_report() -> None:
+    """权限预检异常携带 dict 报告时，Web 层可直接回显。"""
+    report: dict[str, object] = {"overall_status": "failed", "items": []}
+    exc = CFPermissionPrecheckError("权限预检失败", report=report)
+
+    assert _capability_report_from_exception(exc) == report
+
+
+def test_capability_report_from_exception_rejects_non_dict_report() -> None:
+    """异常报告不是 dict 或 Pydantic model 时，不应导致页面 500。"""
+    exc = CFPermissionPrecheckError("权限预检失败", report=["not", "dict"])
+
+    assert _capability_report_from_exception(exc) == {}
 
 
 async def test_delete_cf_account(
