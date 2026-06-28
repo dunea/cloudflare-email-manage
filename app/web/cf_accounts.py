@@ -10,7 +10,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import ValidationError
 
 from app.dependencies import SessionDep
-from app.exceptions import AppException, NotFoundError
+from app.exceptions import AppException, CFPermissionPrecheckError, NotFoundError
 from app.schemas.cf_account import (
     CFAccountCreate,
     CFAccountRead,
@@ -53,9 +53,11 @@ def _capability_report_context(
     return report.model_dump(mode="json")
 
 
-def _capability_report_from_exception(exc: AppException) -> dict[str, object] | None:
+def _capability_report_from_exception(
+    exc: CFPermissionPrecheckError,
+) -> dict[str, object]:
     """从业务异常中提取权限检查报告。"""
-    return exc.data if isinstance(exc.data, dict) else None
+    return exc.report.model_dump(mode="json")
 
 
 @router.get("/cf-accounts")
@@ -114,7 +116,7 @@ async def create_cf_account(
             account_id=account_id or None,
         )
         account = await cf_account_service.bind_cf_account(session, user, data)
-    except (ValidationError, AppException) as exc:
+    except (ValidationError, CFPermissionPrecheckError, AppException) as exc:
         flash(request, error_message(exc), "error")
         return render(
             request,
@@ -130,7 +132,7 @@ async def create_cf_account(
             },
             capability_report=(
                 _capability_report_from_exception(exc)
-                if isinstance(exc, AppException)
+                if isinstance(exc, CFPermissionPrecheckError)
                 else None
             ),
         )
@@ -189,8 +191,13 @@ async def edit_cf_account(
             is_active=is_active == "on",
         )
         updated = await cf_account_service.update_cf_account(session, account, update)
-    except (ValidationError, AppException) as exc:
+    except (ValidationError, CFPermissionPrecheckError, AppException) as exc:
         flash(request, error_message(exc), "error")
+        await session.rollback()
+        await session.refresh(user)
+        account = await cf_account_service.get_cf_account_or_404(
+            session, account_id, user
+        )
         account_read = CFAccountRead.model_validate(account)
         return render(
             request,
@@ -201,7 +208,7 @@ async def edit_cf_account(
             account=account_read,
             capability_report=(
                 _capability_report_from_exception(exc)
-                if isinstance(exc, AppException)
+                if isinstance(exc, CFPermissionPrecheckError)
                 else _capability_report_context(account_read.capability_report)
             ),
         )

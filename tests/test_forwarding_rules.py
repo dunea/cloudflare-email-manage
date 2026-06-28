@@ -94,7 +94,7 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> _CFCalls:
         return {"id": f"cf-dest-{email}", "email": email, "verified": None}
 
     async def _fake_list_email_sending(
-        self: CloudflareClient, account_id: str
+        self: CloudflareClient, zone_id: str
     ) -> list[dict[str, Any]]:
         return []
 

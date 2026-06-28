@@ -78,7 +78,7 @@ def _patch_verify_ok(monkeypatch: pytest.MonkeyPatch) -> None:
         return []
 
     async def _fake_list_email_sending(
-        self: CloudflareClient, account_id: str
+        self: CloudflareClient, zone_id: str
     ) -> list[dict[str, object]]:
         return []
 
@@ -197,6 +197,17 @@ async def test_bind_auto_account_id(
     _patch_verify_ok(monkeypatch)
     token = await _register_and_login(client)
     resp = await _bind(client, token, account_id=None)
+    assert resp.status_code == 201
+    assert resp.json()["data"]["account_id"] == "acc-123"
+
+
+async def test_bind_blank_account_id_auto_resolves(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """account_id 只含空白时按未填写处理，自动解析账号。"""
+    _patch_verify_ok(monkeypatch)
+    token = await _register_and_login(client)
+    resp = await _bind(client, token, account_id="   ")
     assert resp.status_code == 201
     assert resp.json()["data"]["account_id"] == "acc-123"
 
@@ -321,6 +332,101 @@ async def test_bind_rejects_missing_email_routing_write(
     assert rows == []
 
 
+async def test_bind_checks_email_routing_write_for_all_zones(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """多域名中任一 Zone 缺 Email Routing 写权限时拒绝绑定。"""
+    _patch_verify_ok(monkeypatch)
+
+    async def _two_zones(
+        self: CloudflareClient, account_id: str | None = None
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "id": "zone-a",
+                "name": "a.example.com",
+                "status": "active",
+                "account": {"id": account_id or "acc-123", "name": "test-account"},
+            },
+            {
+                "id": "zone-b",
+                "name": "b.example.com",
+                "status": "active",
+                "account": {"id": account_id or "acc-123", "name": "test-account"},
+            },
+        ]
+
+    probed_zone_ids: list[str] = []
+
+    async def _probe_routing_write(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, str]:
+        probed_zone_ids.append(zone_id)
+        if zone_id == "zone-b":
+            raise CloudflareError("HTTP 403: missing Email Routing Rules Write")
+        return {"status": "ok"}
+
+    monkeypatch.setattr(CloudflareClient, "list_zones", _two_zones)
+    monkeypatch.setattr(
+        CloudflareClient, "probe_email_routing_rules_write", _probe_routing_write
+    )
+
+    token = await _register_and_login(client)
+    resp = await _bind(client, token)
+    assert resp.status_code == 403
+    assert probed_zone_ids == ["zone-a", "zone-b"]
+    item = [
+        item for item in resp.json()["data"]["items"] if item["key"] == "email_routing"
+    ][0]
+    assert item["status"] == "failed"
+    rows = (await db_session.execute(select(CFAccount))).scalars().all()
+    assert rows == []
+
+
+async def test_bind_accepts_email_routing_write_for_all_zones(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """多个可访问 Zone 全部通过写权限探测时允许绑定。"""
+    _patch_verify_ok(monkeypatch)
+
+    async def _two_zones(
+        self: CloudflareClient, account_id: str | None = None
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "id": "zone-a",
+                "name": "a.example.com",
+                "status": "active",
+                "account": {"id": account_id or "acc-123", "name": "test-account"},
+            },
+            {
+                "id": "zone-b",
+                "name": "b.example.com",
+                "status": "active",
+                "account": {"id": account_id or "acc-123", "name": "test-account"},
+            },
+        ]
+
+    probed_zone_ids: list[str] = []
+
+    async def _probe_routing_write(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, str]:
+        probed_zone_ids.append(zone_id)
+        return {"status": "ok"}
+
+    monkeypatch.setattr(CloudflareClient, "list_zones", _two_zones)
+    monkeypatch.setattr(
+        CloudflareClient, "probe_email_routing_rules_write", _probe_routing_write
+    )
+
+    token = await _register_and_login(client)
+    resp = await _bind(client, token)
+    assert resp.status_code == 201
+    assert resp.json()["data"]["capability_report"]["zone_count"] == 2
+    assert probed_zone_ids == ["zone-a", "zone-b"]
+
+
 async def test_bind_rejects_missing_destination_address_write(
     client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -380,7 +486,7 @@ async def test_bind_rejects_missing_email_sending_write(
 
 
 async def test_check_token_permissions_endpoint(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """绑定前权限检查接口不落库，仅返回报告。"""
     _patch_verify_ok(monkeypatch)
@@ -394,6 +500,8 @@ async def test_check_token_permissions_endpoint(
     data = resp.json()["data"]
     assert data["overall_status"] == "passed"
     assert data["account_id"] == "acc-123"
+    rows = (await db_session.execute(select(CFAccount))).scalars().all()
+    assert rows == []
 
 
 # ---- 查询 / 更新 / 删除 ----
@@ -437,7 +545,9 @@ async def test_get_cf_account_not_found(
     token = await _register_and_login(client)
     resp = await client.get("/api/v1/cf-accounts/99999", headers=_auth(token))
     assert resp.status_code == 404
-    assert resp.json()["code"] == 1404
+    body = resp.json()
+    assert body["code"] == 1404
+    assert body["data"] is None
 
 
 async def test_cf_account_ownership_isolation(
@@ -524,7 +634,11 @@ async def test_update_cf_account_token_other_account_rejected(
     resp = await client.patch(
         f"/api/v1/cf-accounts/{account_id}",
         headers=_auth(token),
-        json={"api_token": "other-account-token"},
+        json={
+            "name": "错误名称",
+            "api_token": "other-account-token",
+            "is_active": False,
+        },
     )
     assert resp.status_code == 403
     assert "另一个 Cloudflare Account" in resp.json()["message"]
@@ -533,6 +647,8 @@ async def test_update_cf_account_token_other_account_rejected(
         await db_session.execute(select(CFAccount).where(CFAccount.id == account_id))
     ).scalar_one()
     await db_session.refresh(row)
+    assert row.name == "主账号"
+    assert row.is_active is True
     assert row.account_id == "acc-123"
     assert decrypt_token(row.encrypted_api_token) == PLAINTEXT_TOKEN
 
