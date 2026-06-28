@@ -186,6 +186,27 @@ async def test_email_address_crud(
     assert email.is_deleted is True
 
 
+async def test_create_first_email_enables_inbound_routing_and_flash(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """创建域名下第一个邮箱地址时，启用收件路由并提示重新部署 Worker。"""
+    await _web_login(client)
+    user = await _get_user(db_session)
+    domain = await _seed_domain(db_session, user.id, domain_name="mail.com")
+    assert domain.inbound_routing_enabled is False
+
+    resp = await client.post(
+        "/email-addresses",
+        data={"domain_id": str(domain.id), "local_part": "hello"},
+        follow_redirects=True,
+    )
+
+    assert resp.status_code == 200
+    assert "重新一键部署 Worker" in resp.text
+    await db_session.refresh(domain)
+    assert domain.inbound_routing_enabled is True
+
+
 async def test_email_address_invalid_local_part(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

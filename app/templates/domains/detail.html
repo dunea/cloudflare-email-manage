@@ -14,6 +14,7 @@
     <dl class="space-y-3 text-sm">
       <div class="flex justify-between gap-4"><dt class="text-slate-500">Zone ID</dt><dd class="font-mono text-xs text-slate-700">{{ domain.zone_id }}</dd></div>
       <div class="flex justify-between gap-4"><dt class="text-slate-500">状态</dt><dd class="text-slate-700">{{ domain.status }}</dd></div>
+      <div class="flex justify-between gap-4"><dt class="text-slate-500">收件路由</dt><dd>{% if domain.inbound_routing_enabled %}{{ badge("已启用", "green") }}{% else %}{{ badge("未启用", "slate") }}{% endif %}</dd></div>
       <div class="flex justify-between gap-4"><dt class="text-slate-500">创建时间</dt><dd class="text-slate-700">{{ domain.created_at | dt }}</dd></div>
     </dl>
   </div>

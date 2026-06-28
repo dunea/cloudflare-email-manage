@@ -15,6 +15,7 @@ class DomainRead(BaseModel):
     zone_id: str
     domain_name: str
     status: str
+    inbound_routing_enabled: bool
     created_at: datetime
 
 

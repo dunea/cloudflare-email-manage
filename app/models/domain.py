@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -30,6 +30,8 @@ class Domain(Base):
     # 该域名的 Webhook 签名密钥（per-domain，注入到账号级 Worker 的 WEBHOOK_SECRETS）
     # 为空时收件校验回退到全局 CF_WEBHOOK_SECRET（兼容旧部署）
     webhook_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 是否将该域名作为收件邮箱域名纳入 Worker 部署与 Email Routing 配置
+    inbound_routing_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

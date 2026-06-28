@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/macros.html" import empty_state, pagination %}
+{% from "components/macros.html" import badge, empty_state, pagination %}
 {% block title %}域名 · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="mb-6">
@@ -15,6 +15,7 @@
         <th class="px-4 py-3">域名</th>
         <th class="px-4 py-3">Zone ID</th>
         <th class="px-4 py-3">状态</th>
+        <th class="px-4 py-3">收件路由</th>
         <th class="px-4 py-3">创建时间</th>
         <th class="px-4 py-3 text-right">操作</th>
       </tr>
@@ -27,6 +28,7 @@
         </td>
         <td class="px-4 py-3 font-mono text-xs text-slate-500">{{ d.zone_id }}</td>
         <td class="px-4 py-3 text-slate-600">{{ d.status }}</td>
+        <td class="px-4 py-3">{% if d.inbound_routing_enabled %}{{ badge("已启用", "green") }}{% else %}{{ badge("未启用", "slate") }}{% endif %}</td>
         <td class="px-4 py-3 text-slate-400">{{ d.created_at | dt }}</td>
         <td class="px-4 py-3 text-right">
           <a href="/domains/{{ d.id }}" class="text-sm font-medium text-brand hover:underline">详情</a>

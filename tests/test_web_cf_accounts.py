@@ -172,12 +172,12 @@ async def test_dashboard_renders_stats(client: AsyncClient) -> None:
 async def test_new_cf_account_shows_current_permission_guidance(
     client: AsyncClient,
 ) -> None:
-    """绑定页按 Cloudflare 当前 UI 区分整个账户与所有域名权限。"""
+    """绑定页按 Cloudflare 当前 UI 区分整个账户与邮箱域名权限。"""
     await _web_login(client)
     resp = await client.get("/cf-accounts/new")
     assert resp.status_code == 200
     assert "整个账户" in resp.text
-    assert "所有域名" in resp.text
+    assert "邮箱域名" in resp.text
     assert "Zone Settings" in resp.text
     assert "Email Routing Rules" in resp.text
     assert "Workers Routes" in resp.text

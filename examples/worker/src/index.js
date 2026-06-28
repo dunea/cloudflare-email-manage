@@ -1,7 +1,7 @@
 /**
  * CF Email Manager — 账号级 Email Worker
  *
- * 一个 CF 账号部署一个 Worker，服务该账号下所有域名。
+ * 一个 CF 账号部署一个 Worker，服务该账号下已启用收件路由的邮箱域名。
  * Worker 持有两个环境变量：
  *   - WEBHOOK_URL：平台收件 Webhook 端点（plain_text）
  *   - WEBHOOK_SECRETS：域名→{zone_id, secret} 的 JSON 映射（secret，例如
