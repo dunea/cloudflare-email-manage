@@ -16,16 +16,16 @@
              class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
     </div>
     <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">Account ID（可选）</label>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Account ID</label>
       <input name="account_id" value="{{ form.account_id | default('') }}" maxlength="64"
              class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
-      <p class="mt-1 text-xs text-slate-400">留空时将自动从 CF API 获取；如需指定可填写</p>
+      <p class="mt-1 text-xs text-slate-400">User API Token 可留空自动获取；Account API Token 必须填写</p>
     </div>
     <div>
       <label class="mb-1 block text-sm font-medium text-slate-700">API Token</label>
       <input name="api_token" type="password" required
              class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
-      <p class="mt-1 text-xs text-slate-400">仅用于绑定校验，加密存储、绝不回显</p>
+      <p class="mt-1 text-xs text-slate-400">支持 User API Token 和 Account API Token；仅加密存储、绝不回显</p>
     </div>
     <button type="submit"
             class="rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark">校验并绑定</button>
@@ -47,7 +47,7 @@
       <li>{{ note }}</li>
       {% endfor %}
     </ul>
-    <p class="mt-4 text-xs text-slate-400">在 Cloudflare 控制台 → My Profile → API Tokens → Create Token 创建自定义 Token。</p>
+    <p class="mt-4 text-xs text-slate-400">User Token 在 My Profile → API Tokens 创建；Account Token 在 Manage Account → API Tokens 创建。</p>
   </aside>
 </div>
 

@@ -24,6 +24,12 @@ _FAKE_DESTINATION_VERIFIED_AT = "2026-06-26T08:00:00Z"
 _fake_destination_addresses: dict[str, dict[str, dict[str, str]]] = {}
 
 
+class TokenVerifyResult(TypedDict, total=False):
+    """Token verify 接口响应 result。"""
+
+    status: str
+
+
 def _reset_fake_destination_addresses() -> None:
     """清空假 CF 目标地址缓存 (仅供测试隔离使用)."""
     _fake_destination_addresses.clear()
@@ -32,6 +38,16 @@ def _reset_fake_destination_addresses() -> None:
 def _fake_destination_id(email: str) -> str:
     """根据邮箱生成稳定的假 CF 目标地址 ID。"""
     return "fake-dest-" + email.lower().replace("@", "-at-").replace(".", "-")
+
+
+def _token_verify_result(result: object) -> TokenVerifyResult:
+    """提取 Token verify 响应中的已知字段。"""
+    if not isinstance(result, dict):
+        return {}
+    status_value = result.get("status")
+    if status_value is None:
+        return {}
+    return {"status": str(status_value)}
 
 
 # ---- Worker 部署相关响应 TypedDict ----
@@ -101,6 +117,7 @@ class WorkerSecretResult(TypedDict, total=False):
     """Worker secret 写入成功后的 CF 响应 result。"""
 
     name: str
+
 
 # CF API 默认超时（秒）
 _DEFAULT_TIMEOUT = 15.0
@@ -395,12 +412,21 @@ class CloudflareClient:
 
     # ---- Token 校验 ----
 
-    async def verify_token(self) -> dict[str, Any]:
-        """校验 API Token 有效性（GET /user/tokens/verify）。"""
+    async def verify_token(self) -> TokenVerifyResult:
+        """校验 API Token 有效性 (GET /user/tokens/verify)。"""
         if settings.CF_FAKE_MODE:
             return {"status": "active"}
         result = await self._request("GET", "/user/tokens/verify")
-        return result if isinstance(result, dict) else {}
+        return _token_verify_result(result)
+
+    async def verify_account_token(self, account_id: str) -> TokenVerifyResult:
+        """校验 Account API Token 有效性。"""
+        if settings.CF_FAKE_MODE:
+            return {"status": "active"}
+        result = await self._request(
+            "GET", f"/accounts/{account_id}/tokens/verify"
+        )
+        return _token_verify_result(result)
 
     # ---- Account（账户）----
 

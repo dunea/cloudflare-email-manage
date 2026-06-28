@@ -52,6 +52,12 @@ def _patch_verify_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_verify(self: CloudflareClient) -> dict[str, str]:
         return {"status": "active"}
 
+    async def _fake_verify_account(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        """模拟 Account Token 校验成功。"""
+        return {"status": "active"}
+
     async def _fake_list_accounts(self: CloudflareClient) -> list[dict[str, str]]:
         return [{"id": "acc-123", "name": "test-account"}]
 
@@ -108,6 +114,7 @@ def _patch_verify_ok(monkeypatch: pytest.MonkeyPatch) -> None:
         return {"status": "ok"}
 
     monkeypatch.setattr(CloudflareClient, "verify_token", _fake_verify)
+    monkeypatch.setattr(CloudflareClient, "verify_account_token", _fake_verify_account)
     monkeypatch.setattr(CloudflareClient, "list_accounts", _fake_list_accounts)
     monkeypatch.setattr(CloudflareClient, "list_zones", _fake_list_zones)
     monkeypatch.setattr(CloudflareClient, "list_routing_rules", _fake_list_routing_rules)
@@ -262,6 +269,97 @@ async def test_bind_rejects_bearer_prefix(
     assert body["data"]["items"][0]["key"] == "token_auth"
     rows = (await db_session.execute(select(CFAccount))).scalars().all()
     assert rows == []
+
+
+async def test_bind_account_token_requires_account_id(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Account API Token 未填写 account_id 时返回明确提示。"""
+    _patch_verify_ok(monkeypatch)
+    token = await _register_and_login(client)
+    resp = await _bind(client, token, api_token="cfat_secret", account_id=None)
+    assert resp.status_code == 403
+    body = resp.json()
+    assert "Account ID" in body["message"]
+    item = body["data"]["items"][0]
+    assert item["key"] == "token_auth"
+    assert "Account ID" in item["message"]
+    assert "Account ID" in item["fix_hint"]
+    rows = (await db_session.execute(select(CFAccount))).scalars().all()
+    assert rows == []
+
+
+async def test_bind_account_token_uses_account_verify(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cfat_ 前缀 Token 使用账号级 verify endpoint。"""
+    _patch_verify_ok(monkeypatch)
+    seen: list[str] = []
+
+    async def _unexpected_user_verify(self: CloudflareClient) -> dict[str, str]:
+        """确保账号令牌不会走用户级校验。"""
+        raise AssertionError("Account API Token 不应调用 user token verify")
+
+    async def _account_verify(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        """记录账号级校验使用的 Account ID。"""
+        seen.append(account_id)
+        return {"status": "active"}
+
+    monkeypatch.setattr(CloudflareClient, "verify_token", _unexpected_user_verify)
+    monkeypatch.setattr(CloudflareClient, "verify_account_token", _account_verify)
+
+    token = await _register_and_login(client)
+    resp = await _bind(client, token, api_token="cfat_secret", account_id="acc-123")
+    assert resp.status_code == 201
+    assert seen == ["acc-123"]
+    data = resp.json()["data"]
+    assert data["account_id"] == "acc-123"
+    assert data["capability_report"]["items"][0]["message"].startswith(
+        "Account API Token"
+    )
+    row = (await db_session.execute(select(CFAccount))).scalar_one()
+    assert decrypt_token(row.encrypted_api_token) == "cfat_secret"
+
+
+async def test_bind_unprefixed_token_falls_back_to_account_verify(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """无前缀 Token 在 user verify 认证失败且提供 account_id 时回退账号校验。"""
+    _patch_verify_ok(monkeypatch)
+    seen: list[str] = []
+
+    async def _user_verify_auth_failure(self: CloudflareClient) -> dict[str, str]:
+        """模拟用户级 Token 校验返回认证失败。"""
+        raise CloudflareError(
+            "Cloudflare API 返回失败 (HTTP 403; GET /user/tokens/verify): "
+            "[{'code': 10000, 'message': 'Authentication error'}]",
+            cf_method="GET",
+            cf_path="/user/tokens/verify",
+            cf_status_code=403,
+            cf_errors=[{"code": 10000, "message": "Authentication error"}],
+        )
+
+    async def _account_verify(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        """记录回退账号级校验使用的 Account ID。"""
+        seen.append(account_id)
+        return {"status": "active"}
+
+    monkeypatch.setattr(CloudflareClient, "verify_token", _user_verify_auth_failure)
+    monkeypatch.setattr(CloudflareClient, "verify_account_token", _account_verify)
+
+    token = await _register_and_login(client)
+    resp = await _bind(client, token, api_token="legacy-account-token")
+    assert resp.status_code == 201
+    assert seen == ["acc-123"]
+    assert resp.json()["data"]["capability_report"]["items"][0]["message"].startswith(
+        "Account API Token"
+    )
+    row = (await db_session.execute(select(CFAccount))).scalar_one()
+    assert decrypt_token(row.encrypted_api_token) == "legacy-account-token"
 
 
 async def test_bind_rejects_no_accessible_zone(
@@ -774,6 +872,22 @@ async def test_cloudflare_client_verify_token_success() -> None:
     assert result["status"] == "active"
 
 
+async def test_cloudflare_client_verify_account_token_success() -> None:
+    """verify_account_token 使用账号级校验接口。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """断言账号级 verify 请求路径并返回成功。"""
+        assert request.url.path.endswith("/accounts/acc1/tokens/verify")
+        assert request.headers["Authorization"] == "Bearer tok"
+        return httpx.Response(
+            200, json={"success": True, "result": {"status": "active"}}
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    result = await cf.verify_account_token("acc1")
+    assert result["status"] == "active"
+
+
 async def test_cloudflare_client_failure_raises() -> None:
     """success=false 时抛出 CloudflareError。"""
 
@@ -790,6 +904,29 @@ async def test_cloudflare_client_failure_raises() -> None:
     assert ei.value.cf_method == "GET"
     assert ei.value.cf_path == "/user/tokens/verify"
     assert ei.value.cf_status_code == 200
+
+
+async def test_cloudflare_client_verify_account_token_failure_raises() -> None:
+    """账号级 Token 校验失败时保留 Cloudflare 路径信息。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """返回账号级 verify 的 Cloudflare 认证失败响应。"""
+        return httpx.Response(
+            403,
+            json={
+                "success": False,
+                "errors": [{"code": 10000, "message": "Authentication error"}],
+            },
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    with pytest.raises(CloudflareError) as ei:
+        await cf.verify_account_token("acc1")
+    assert "HTTP 403" in ei.value.message
+    assert "GET /accounts/acc1/tokens/verify" in ei.value.message
+    assert ei.value.cf_method == "GET"
+    assert ei.value.cf_path == "/accounts/acc1/tokens/verify"
+    assert ei.value.cf_status_code == 403
 
 
 async def test_cloudflare_client_list_zones() -> None:

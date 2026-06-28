@@ -103,7 +103,7 @@
         <label class="mb-1 block text-sm font-medium text-slate-700">更换 API Token（留空则不变）</label>
         <input name="api_token" type="password"
                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
-        <p class="mt-1 text-xs text-slate-400">更换 Token 后会保持当前 Account ID，并重新检查权限</p>
+        <p class="mt-1 text-xs text-slate-400">支持 User API Token 和 Account API Token；更换后会按当前 Account ID 重新检查权限</p>
       </div>
       <label class="flex items-center gap-2 text-sm text-slate-700">
         <input type="checkbox" name="is_active" {% if account.is_active %}checked{% endif %} /> 启用该账号
@@ -126,7 +126,8 @@
     <li>为缺失密钥的域名自动补生成 <code class="font-mono">webhook_secret</code>，已有密钥沿用</li>
     <li>每次部署会刷新所有域名的 catch-all 路由</li>
     <li>新增域名后需重新部署一次以更新密钥映射</li>
-    <li>CF API Token 必须通过上方权限预检，尤其需要 <code class="font-mono">Workers Scripts: Edit</code>、<code class="font-mono">Zone Settings: Edit</code> 和 <code class="font-mono">Email Routing Rules: Edit</code></li>
+    <li>CF API Token 必须通过上方权限预检；Account API Token 会使用当前 Account ID 执行账号级校验</li>
+    <li>权限尤其需要 <code class="font-mono">Workers Scripts: Edit</code>、<code class="font-mono">Zone Settings: Edit</code> 和 <code class="font-mono">Email Routing Rules: Edit</code></li>
     <li>每个域名独立签名密钥，验证 webhook 时按收件域名自动定位</li>
   </ul>
 </div>
