@@ -4,6 +4,7 @@
 共享：域名所有者可将域名共享给其他用户使用。
 """
 
+from fastapi import status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,34 @@ from app.exceptions import AppException, NotFoundError, PermissionError
 from app.models import CFAccount, Domain, DomainAssignment, User
 from app.services.cf_account_service import build_client
 from app.services.user_service import get_user_by_username
+
+
+def _zone_account_id(zone: dict[str, object]) -> str | None:
+    """从 Cloudflare Zone 响应中提取 account.id。"""
+    account = zone.get("account")
+    if not isinstance(account, dict):
+        return None
+    account_id = account.get("id")
+    return str(account_id) if account_id else None
+
+
+def _assert_zones_match_account(
+    zones: list[dict[str, object]], expected_account_id: str
+) -> None:
+    """确认 Cloudflare 返回的 Zone 均属于当前绑定账号。"""
+    for zone in zones:
+        account_id = _zone_account_id(zone)
+        if account_id is None or account_id == expected_account_id:
+            continue
+        domain_name = str(zone.get("name") or zone.get("id") or "未知域名")
+        raise AppException(
+            "Cloudflare 返回的域名与当前绑定 Account 不匹配："
+            f"{domain_name} 属于 Account {account_id}，"
+            f"不是当前绑定的 {expected_account_id}。"
+            "请检查 Token 的 Account/Zone 资源范围，或为该 Account 新增绑定账号。",
+            code=1403,
+            http_status=status.HTTP_403_FORBIDDEN,
+        )
 
 
 async def sync_domains(
@@ -24,15 +53,19 @@ async def sync_domains(
     避免部署失败时出现"DB 已写但 Worker 未下发"的半成品状态。
     """
     client = build_client(cf_account)
-    zones = await client.list_zones()
+    zones = await client.list_zones(cf_account.account_id)
+    _assert_zones_match_account(zones, cf_account.account_id)
 
     synced: list[Domain] = []
+    synced_zone_ids: set[str] = set()
     for zone in zones:
         zone_id = zone.get("id")
         domain_name = zone.get("name")
         if not zone_id or not domain_name:
             continue
 
+        zone_id = str(zone_id)
+        synced_zone_ids.add(zone_id)
         status = zone.get("status", "active")
         existing = (
             await session.execute(
@@ -47,15 +80,24 @@ async def sync_domains(
             domain = Domain(
                 cf_account_id=cf_account.id,
                 zone_id=zone_id,
-                domain_name=domain_name,
-                status=status,
+                domain_name=str(domain_name),
+                status=str(status),
             )
             session.add(domain)
             synced.append(domain)
         else:
-            existing.domain_name = domain_name
-            existing.status = status
+            existing.domain_name = str(domain_name)
+            existing.status = str(status)
             synced.append(existing)
+
+    existing_domains = (
+        await session.execute(
+            select(Domain).where(Domain.cf_account_id == cf_account.id)
+        )
+    ).scalars()
+    for domain in existing_domains:
+        if domain.zone_id not in synced_zone_ids:
+            domain.status = "unavailable"
 
     await session.commit()
     for domain in synced:

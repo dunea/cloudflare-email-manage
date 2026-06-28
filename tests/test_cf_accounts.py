@@ -736,8 +736,13 @@ async def test_cloudflare_client_failure_raises() -> None:
         )
 
     cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
-    with pytest.raises(CloudflareError):
+    with pytest.raises(CloudflareError) as ei:
         await cf.verify_token()
+    assert "HTTP 200" in ei.value.message
+    assert "GET /user/tokens/verify" in ei.value.message
+    assert ei.value.cf_method == "GET"
+    assert ei.value.cf_path == "/user/tokens/verify"
+    assert ei.value.cf_status_code == 200
 
 
 async def test_cloudflare_client_list_zones() -> None:

@@ -55,9 +55,10 @@ def _auth(token: str) -> dict[str, str]:
 
 
 def _patch_cf(
-    monkeypatch: pytest.MonkeyPatch, zones: list[dict[str, str]] | None = None
-) -> None:
+    monkeypatch: pytest.MonkeyPatch, zones: list[dict[str, object]] | None = None
+) -> dict[str, object]:
     """Mock CloudflareClient 的 verify_token、list_accounts 与 list_zones。"""
+    captured: dict[str, object] = {"list_zones_account_ids": []}
 
     async def _fake_verify(self: CloudflareClient) -> dict[str, str]:
         return {"status": "active"}
@@ -67,7 +68,10 @@ def _patch_cf(
 
     async def _fake_list_zones(
         self: CloudflareClient, account_id: str | None = None
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, object]]:
+        account_ids = captured["list_zones_account_ids"]
+        assert isinstance(account_ids, list)
+        account_ids.append(account_id)
         return ZONES if zones is None else zones
 
     async def _fake_list_routing_rules(
@@ -133,6 +137,7 @@ def _patch_cf(
         "probe_worker_scripts_write",
         _fake_probe_worker_scripts_write,
     )
+    return captured
 
 
 async def _bind(
@@ -161,7 +166,7 @@ async def test_sync_domains(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """同步拉取 CF 域名并入库。"""
-    _patch_cf(monkeypatch)
+    cap = _patch_cf(monkeypatch)
     token = await _register_and_login(client)
     account_id = await _bind(client, token)
 
@@ -173,6 +178,131 @@ async def test_sync_domains(
     assert data["synced"] == 2
     names = {d["domain_name"] for d in data["domains"]}
     assert names == {"example.com", "example.org"}
+    account_ids = cap["list_zones_account_ids"]
+    assert isinstance(account_ids, list)
+    assert account_ids[-1] == "acc-123"
+
+
+async def test_sync_domains_filters_to_bound_account(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Token 覆盖多账号时，同步只使用当前绑定 Account 的 Zone。"""
+    _patch_cf(monkeypatch)
+    calls: list[str | None] = []
+
+    async def _fake_list_zones(
+        self: CloudflareClient, account_id: str | None = None
+    ) -> list[dict[str, object]]:
+        calls.append(account_id)
+        if account_id == "acc-123":
+            return [
+                {
+                    "id": "zone1",
+                    "name": "example.com",
+                    "status": "active",
+                    "account": {"id": "acc-123", "name": "current"},
+                }
+            ]
+        return [
+            {
+                "id": "zone1",
+                "name": "example.com",
+                "status": "active",
+                "account": {"id": "acc-123", "name": "current"},
+            },
+            {
+                "id": "zone-other",
+                "name": "other.com",
+                "status": "active",
+                "account": {"id": "acc-other", "name": "other"},
+            },
+        ]
+
+    monkeypatch.setattr(CloudflareClient, "list_zones", _fake_list_zones)
+    token = await _register_and_login(client)
+    account_id = await _bind(client, token)
+
+    resp = await client.post(
+        f"/api/v1/cf-accounts/{account_id}/sync", headers=_auth(token)
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["synced"] == 1
+    assert data["domains"][0]["domain_name"] == "example.com"
+    assert all(call == "acc-123" for call in calls)
+
+
+async def test_sync_domains_rejects_mismatched_zone_account(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cloudflare 返回跨账号 Zone 时拒绝同步。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    account_id = await _bind(client, token)
+
+    async def _fake_list_zones(
+        self: CloudflareClient, account_id: str | None = None
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "id": "zone-other",
+                "name": "other.com",
+                "status": "active",
+                "account": {"id": "acc-other", "name": "other"},
+            }
+        ]
+
+    monkeypatch.setattr(CloudflareClient, "list_zones", _fake_list_zones)
+
+    resp = await client.post(
+        f"/api/v1/cf-accounts/{account_id}/sync", headers=_auth(token)
+    )
+
+    assert resp.status_code == 403
+    message = resp.json()["message"]
+    assert "Account 不匹配" in message
+    assert "other.com" in message
+
+
+async def test_sync_domains_marks_stale_domains_unavailable(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """当前账号不再返回的旧域名只标记不可用，不删除。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    account_id = await _bind(client, token)
+
+    await client.post(
+        f"/api/v1/cf-accounts/{account_id}/sync", headers=_auth(token)
+    )
+
+    async def _fake_list_zones(
+        self: CloudflareClient, account_id: str | None = None
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "id": "zone1",
+                "name": "example.com",
+                "status": "active",
+                "account": {"id": "acc-123", "name": "current"},
+            }
+        ]
+
+    monkeypatch.setattr(CloudflareClient, "list_zones", _fake_list_zones)
+
+    resp = await client.post(
+        f"/api/v1/cf-accounts/{account_id}/sync", headers=_auth(token)
+    )
+    listing = await client.get("/api/v1/domains", headers=_auth(token))
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["synced"] == 1
+    domains = listing.json()["data"]["items"]
+    assert len(domains) == 2
+    statuses = {item["domain_name"]: item["status"] for item in domains}
+    assert statuses["example.com"] == "active"
+    assert statuses["example.org"] == "unavailable"
 
 
 async def test_sync_is_idempotent(

@@ -28,8 +28,10 @@ import logging
 import secrets
 from ipaddress import ip_address
 from pathlib import Path
+from typing import NoReturn
 from urllib.parse import urlparse
 
+from fastapi import status as http_status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,7 +41,7 @@ from app.models import CFAccount, Domain
 from app.schemas.cf_account import DeployedDomain, WorkerDeployResult
 from app.services import cf_permission_service
 from app.services.cf_account_service import build_client
-from app.services.cloudflare import WorkerBinding
+from app.services.cloudflare import CloudflareClient, WorkerBinding
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,123 @@ BUNDLE_PATH = (
 # 兼容性日期与 flags（与 examples/worker/wrangler.toml 保持一致）
 _COMPATIBILITY_DATE = "2025-01-01"
 _COMPATIBILITY_FLAGS = ["nodejs_compat"]
+
+
+def _is_auth_or_permission_error(exc: CloudflareError) -> bool:
+    """判断 Cloudflare 错误是否属于认证/权限类。"""
+    raw = str(exc).lower()
+    return (
+        exc.cf_status_code in {401, 403}
+        or "10000" in raw
+        or "authentication error" in raw
+        or "permission" in raw
+        or "unauthorized" in raw
+        or "forbidden" in raw
+    )
+
+
+def _raise_deploy_cloudflare_error(
+    stage: str,
+    exc: CloudflareError,
+    *,
+    account_id: str,
+    zone_id: str | None = None,
+    domain_name: str | None = None,
+) -> NoReturn:
+    """记录脱敏部署上下文，并转换成用户可行动的业务错误。"""
+    log_parts = [f"stage={stage}", f"account_id={account_id}"]
+    if zone_id:
+        log_parts.append(f"zone_id={zone_id}")
+    if domain_name:
+        log_parts.append(f"domain_name={domain_name}")
+    logger.exception(
+        "一键部署 Worker 调用 Cloudflare 失败: %s; method=%s; path=%s; "
+        "status=%s; errors=%s",
+        ", ".join(log_parts),
+        exc.cf_method,
+        exc.cf_path,
+        exc.cf_status_code,
+        exc.cf_errors,
+    )
+    user_hint = cf_permission_service.describe_cloudflare_error(exc)
+    error_is_permission = _is_auth_or_permission_error(exc)
+    permission_hint = ""
+    if error_is_permission and ("Worker 脚本" in stage or "Worker Secret" in stage):
+        permission_hint = (
+            " 请确认 Token 具备 Account:Workers Scripts:Edit / "
+            "Workers Scripts Write，并重新检查权限。"
+        )
+    raise AppException(
+        f"部署 Worker 失败：{stage}。{user_hint}{permission_hint} "
+        f"Cloudflare 摘要：{exc}",
+        code=1403 if error_is_permission else 1502,
+        http_status=(
+            http_status.HTTP_403_FORBIDDEN
+            if error_is_permission
+            else http_status.HTTP_502_BAD_GATEWAY
+        ),
+    ) from exc
+
+
+def _zone_account_id(zone: dict[str, object]) -> str | None:
+    """从 Cloudflare Zone 响应中提取 account.id。"""
+    account = zone.get("account")
+    if not isinstance(account, dict):
+        return None
+    account_id = account.get("id")
+    return str(account_id) if account_id else None
+
+
+def _assert_cloudflare_zones_match_account(
+    zones: list[dict[str, object]], expected_account_id: str
+) -> None:
+    """确认部署前拉到的 Zone 均属于当前绑定账号。"""
+    for zone in zones:
+        account_id = _zone_account_id(zone)
+        if account_id is None or account_id == expected_account_id:
+            continue
+        domain_name = str(zone.get("name") or zone.get("id") or "未知域名")
+        raise AppException(
+            "Cloudflare 返回的域名与当前绑定 Account 不匹配："
+            f"{domain_name} 属于 Account {account_id}，"
+            f"不是当前绑定的 {expected_account_id}。"
+            "请重新同步域名；如果这些域名属于另一个 Cloudflare Account，"
+            "请新增绑定账号。",
+            code=1403,
+            http_status=http_status.HTTP_403_FORBIDDEN,
+        )
+
+
+def _assert_local_domains_match_cloudflare_zones(
+    domains: list[Domain], current_zone_ids: set[str]
+) -> None:
+    """部署前确认本地域名仍属于当前绑定账号。"""
+    mismatched = [domain for domain in domains if domain.zone_id not in current_zone_ids]
+    if not mismatched:
+        return
+    sample = "、".join(
+        f"{domain.domain_name} (zone_id={domain.zone_id})"
+        for domain in mismatched[:5]
+    )
+    extra = "" if len(mismatched) <= 5 else f" 等 {len(mismatched)} 个域名"
+    raise AppException(
+        "本地域名与当前 Cloudflare Account 不一致，已拒绝部署。"
+        f"异常域名：{sample}{extra}。"
+        "请先重新同步域名；如果这些域名属于另一个 Cloudflare Account，"
+        "请新增绑定账号。",
+        code=1403,
+        http_status=http_status.HTTP_403_FORBIDDEN,
+    )
+
+
+async def _assert_deploy_domain_scope(
+    client: CloudflareClient, cf_account: CFAccount, domains: list[Domain]
+) -> None:
+    """部署前重新拉取当前账号 Zone，并校验本地域名归属。"""
+    zones = await client.list_zones(cf_account.account_id)
+    _assert_cloudflare_zones_match_account(zones, cf_account.account_id)
+    current_zone_ids = {str(zone.get("id")) for zone in zones if zone.get("id")}
+    _assert_local_domains_match_cloudflare_zones(domains, current_zone_ids)
 
 
 def _platform_webhook_url() -> str:
@@ -145,15 +264,31 @@ async def deploy_worker_for_account(
         )
 
     # 部署前重新检查 Token 核心能力，避免旧 Token 权限被外部收回后进入半部署状态。
-    report = await cf_permission_service.refresh_cf_account_permissions(
-        session, cf_account
-    )
+    try:
+        report = await cf_permission_service.refresh_cf_account_permissions(
+            session, cf_account
+        )
+    except CloudflareError as exc:
+        _raise_deploy_cloudflare_error(
+            "权限复检失败",
+            exc,
+            account_id=cf_account.account_id,
+        )
     cf_permission_service.ensure_report_passed(report)
+
+    client = build_client(cf_account)
+    try:
+        await _assert_deploy_domain_scope(client, cf_account, domains)
+    except CloudflareError as exc:
+        _raise_deploy_cloudflare_error(
+            "校验域名归属失败",
+            exc,
+            account_id=cf_account.account_id,
+        )
 
     # 2. 内存中预生成缺失的 webhook_secret（延后 commit）
     _prepare_domain_secrets(domains)
 
-    client = build_client(cf_account)
     webhook_url = _platform_webhook_url()
     bundle_bytes = _read_bundle()
 
@@ -161,12 +296,17 @@ async def deploy_worker_for_account(
     deployed: list[DeployedDomain] = []
     for domain in domains:
         try:
-            status = await client.get_email_routing_status(domain.zone_id)
-            if not status.get("enabled", False):
+            routing_status = await client.get_email_routing_status(domain.zone_id)
+            if not routing_status.get("enabled", False):
                 await client.enable_email_routing(domain.zone_id)
-        except CloudflareError:
-            logger.exception("启用 Email Routing 失败: %s", domain.domain_name)
-            raise
+        except CloudflareError as exc:
+            _raise_deploy_cloudflare_error(
+                f"查询/启用 Email Routing 失败：{domain.domain_name}",
+                exc,
+                account_id=cf_account.account_id,
+                zone_id=domain.zone_id,
+                domain_name=domain.domain_name,
+            )
         deployed.append(
             DeployedDomain(
                 domain_id=domain.id,
@@ -190,16 +330,11 @@ async def deploy_worker_for_account(
             bindings=bindings,
         )
     except CloudflareError as exc:
-        hint = cf_permission_service.describe_cloudflare_error(exc)
-        if "10000" in str(exc) or "403" in str(exc) or "permission" in str(exc).lower():
-            raise AppException(
-                "部署 Worker 失败：无法上传 Worker 脚本。"
-                f"{hint} 请确认 Token 具备 Account:Workers Scripts:Edit / "
-                "Workers Scripts Write，并重新检查权限。",
-                code=1403,
-                http_status=403,
-            ) from exc
-        raise
+        _raise_deploy_cloudflare_error(
+            "上传 Worker 脚本失败",
+            exc,
+            account_id=cf_account.account_id,
+        )
 
     # 5. 先 commit 新生成的 webhook_secret（DB 优先成为真相源）
     await session.commit()
@@ -210,16 +345,32 @@ async def deploy_worker_for_account(
         for d in domains
     }
     secrets_json = json.dumps(secrets_map, ensure_ascii=False, separators=(",", ":"))
-    await client.set_worker_secret(
-        account_id=cf_account.account_id,
-        script_name=WORKER_NAME,
-        secret_name="WEBHOOK_SECRETS",
-        secret_value=secrets_json,
-    )
+    try:
+        await client.set_worker_secret(
+            account_id=cf_account.account_id,
+            script_name=WORKER_NAME,
+            secret_name="WEBHOOK_SECRETS",
+            secret_value=secrets_json,
+        )
+    except CloudflareError as exc:
+        _raise_deploy_cloudflare_error(
+            "设置 Worker Secret 失败",
+            exc,
+            account_id=cf_account.account_id,
+        )
 
     # 7. 对每个域名配置 catch-all -> Worker（最后一步，邮件开始流入）
     for domain in domains:
-        await client.update_catch_all_to_worker(domain.zone_id, WORKER_NAME)
+        try:
+            await client.update_catch_all_to_worker(domain.zone_id, WORKER_NAME)
+        except CloudflareError as exc:
+            _raise_deploy_cloudflare_error(
+                f"配置 {domain.domain_name} catch-all 失败 (zone_id={domain.zone_id})",
+                exc,
+                account_id=cf_account.account_id,
+                zone_id=domain.zone_id,
+                domain_name=domain.domain_name,
+            )
 
     return WorkerDeployResult(
         worker_name=WORKER_NAME,
