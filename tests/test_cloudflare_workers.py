@@ -81,7 +81,211 @@ async def test_upload_worker_script_400_raises() -> None:
         )
 
 
-# ---- Workers Scripts：Secret ----
+# ---- Workers Scripts：列表 / Secret ----
+
+
+async def test_list_worker_scripts_uses_account_endpoint() -> None:
+    """list_worker_scripts 使用账号级 Workers Scripts 列表接口。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert str(request.url).endswith("/accounts/acc1/workers/scripts")
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "result": [{"id": "sw", "script_name": "sw"}],
+            },
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    scripts = await cf.list_worker_scripts("acc1")
+    assert scripts[0]["script_name"] == "sw"
+
+
+async def test_probe_worker_scripts_write_accepts_validation_error() -> None:
+    """写权限探测遇到非权限类校验错误时视为通过。"""
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["body"] = request.content
+        return httpx.Response(
+            400,
+            json={
+                "success": False,
+                "errors": [{"code": 10021, "message": "script not found"}],
+            },
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    result = await cf.probe_worker_scripts_write("acc1")
+    assert result["status"] == "ok"
+    assert captured["method"] == "PUT"
+    url = captured["url"]
+    assert isinstance(url, str)
+    assert url.endswith(
+        "/accounts/acc1/workers/scripts/"
+        "cf-email-manager-permission-probe-never-create/secrets"
+    )
+    assert captured["body"] == b"{}"
+
+
+async def test_probe_worker_scripts_write_permission_error_raises() -> None:
+    """写权限探测遇到认证或权限错误时抛出 CloudflareError。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "success": False,
+                "errors": [{"code": 10000, "message": "Authentication error"}],
+            },
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    with pytest.raises(CloudflareError):
+        await cf.probe_worker_scripts_write("acc1")
+
+
+async def test_probe_worker_scripts_write_accepts_script_not_found_404() -> None:
+    """Workers 写探测遇到明确脚本不存在时视为已通过鉴权。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={
+                "success": False,
+                "errors": [{"code": 10021, "message": "script not found"}],
+            },
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    result = await cf.probe_worker_scripts_write("acc1")
+    assert result["status"] == "ok"
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 503])
+async def test_probe_worker_scripts_write_transient_errors_raise(
+    status_code: int,
+) -> None:
+    """429/5xx 不能被误判为 Workers 写权限通过。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code,
+            json={"success": False, "errors": [{"message": "temporary error"}]},
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    with pytest.raises(CloudflareError, match="暂时无法完成权限探测"):
+        await cf.probe_worker_scripts_write("acc1")
+
+
+async def test_probe_worker_scripts_write_non_json_raises() -> None:
+    """非 JSON 响应不能被误判为 Workers 写权限通过。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text="bad gateway")
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    with pytest.raises(CloudflareError, match="非 JSON"):
+        await cf.probe_worker_scripts_write("acc1")
+
+
+async def test_probe_worker_scripts_write_unexpected_success_raises() -> None:
+    """无效探测 payload 返回 2xx 时按异常失败处理。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "result": {}})
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    with pytest.raises(CloudflareError, match="无效探测 payload"):
+        await cf.probe_worker_scripts_write("acc1")
+
+
+async def test_probe_email_routing_rules_write_uses_invalid_create_payload() -> None:
+    """Email Routing 写探测使用创建规则接口和无效 payload。"""
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["body"] = request.content
+        return httpx.Response(
+            400,
+            json={
+                "success": False,
+                "errors": [
+                    {
+                        "message": "matchers is required",
+                        "source": {"pointer": "/matchers"},
+                    }
+                ],
+            },
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    result = await cf.probe_email_routing_rules_write("zone1")
+    assert result["status"] == "ok"
+    assert captured["method"] == "POST"
+    url = captured["url"]
+    assert isinstance(url, str)
+    assert url.endswith("/zones/zone1/email/routing/rules")
+    assert captured["body"] == b"{}"
+
+
+async def test_probe_destination_addresses_write_uses_invalid_create_payload() -> None:
+    """目标地址写探测使用创建地址接口和无效 payload，不发送验证邮件。"""
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["body"] = request.content
+        return httpx.Response(
+            400,
+            json={
+                "success": False,
+                "errors": [{"message": "email is required"}],
+            },
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    result = await cf.probe_destination_addresses_write("acc1")
+    assert result["status"] == "ok"
+    assert captured["method"] == "POST"
+    url = captured["url"]
+    assert isinstance(url, str)
+    assert url.endswith("/accounts/acc1/email/routing/addresses")
+    assert captured["body"] == b"{}"
+
+
+async def test_probe_email_sending_write_uses_invalid_send_payload() -> None:
+    """Email Sending 写探测使用发件接口和无效 payload，不发送邮件。"""
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["body"] = request.content
+        return httpx.Response(
+            400,
+            json={
+                "success": False,
+                "errors": [{"message": "from is required"}],
+            },
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    result = await cf.probe_email_sending_write("acc1")
+    assert result["status"] == "ok"
+    assert captured["method"] == "POST"
+    url = captured["url"]
+    assert isinstance(url, str)
+    assert url.endswith("/accounts/acc1/email/sending/send")
+    assert captured["body"] == b"{}"
 
 
 async def test_set_worker_secret_payload() -> None:
@@ -148,6 +352,25 @@ async def test_send_email_uses_email_sending_rest_endpoint() -> None:
     assert url.endswith("/accounts/acc1/email/sending/send")
     assert captured["body"] == payload
     assert result["success"] is True
+
+
+async def test_list_email_sending_subdomains_uses_zone_endpoint() -> None:
+    """list_email_sending_subdomains 使用 Zone 级 Email Sending 配置列表接口。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert str(request.url).endswith("/zones/zone1/email/sending/subdomains")
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "result": [{"name": "example.com", "status": "ready"}],
+            },
+        )
+
+    cf = CloudflareClient("tok", transport=httpx.MockTransport(handler))
+    subdomains = await cf.list_email_sending_subdomains("zone1")
+    assert subdomains[0]["name"] == "example.com"
 
 
 async def test_fake_destination_addresses_follow_create_delete_state(

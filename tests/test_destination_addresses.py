@@ -64,6 +64,11 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> _CFCalls:
     ) -> list[dict[str, str]]:
         return ZONES
 
+    async def _fake_list_routing_rules(
+        self: CloudflareClient, zone_id: str
+    ) -> list[dict[str, Any]]:
+        return []
+
     async def _fake_create_dest(
         self: CloudflareClient, account_id: str, email: str
     ) -> dict[str, Any]:
@@ -91,8 +96,34 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> _CFCalls:
         calls.deleted_rules.append((zone_id, rule_id))
         return {"id": rule_id}
 
+    async def _fake_list_email_sending(
+        self: CloudflareClient, account_id: str
+    ) -> list[dict[str, Any]]:
+        return []
+
+    async def _fake_probe_email_routing_rules_write(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _fake_probe_destination_addresses_write(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _fake_probe_email_sending_write(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _fake_probe_worker_scripts_write(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
     monkeypatch.setattr(CloudflareClient, "verify_token", _fake_verify)
     monkeypatch.setattr(CloudflareClient, "list_zones", _fake_list_zones)
+    monkeypatch.setattr(CloudflareClient, "list_routing_rules", _fake_list_routing_rules)
     monkeypatch.setattr(
         CloudflareClient, "create_destination_address", _fake_create_dest
     )
@@ -104,6 +135,27 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> _CFCalls:
     )
     monkeypatch.setattr(CloudflareClient, "create_routing_rule", _fake_create_rule)
     monkeypatch.setattr(CloudflareClient, "delete_routing_rule", _fake_delete_rule)
+    monkeypatch.setattr(
+        CloudflareClient, "list_email_sending_subdomains", _fake_list_email_sending
+    )
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_email_routing_rules_write",
+        _fake_probe_email_routing_rules_write,
+    )
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_destination_addresses_write",
+        _fake_probe_destination_addresses_write,
+    )
+    monkeypatch.setattr(
+        CloudflareClient, "probe_email_sending_write", _fake_probe_email_sending_write
+    )
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_worker_scripts_write",
+        _fake_probe_worker_scripts_write,
+    )
     return calls
 
 

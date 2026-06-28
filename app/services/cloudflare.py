@@ -11,6 +11,7 @@ Email Routing（转发规则 / 目标地址）、Email Sending（Beta）。
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any, NotRequired, TypedDict
 
 import httpx
@@ -104,6 +105,121 @@ class WorkerSecretResult(TypedDict, total=False):
 _DEFAULT_TIMEOUT = 15.0
 
 
+@dataclass(frozen=True)
+class _ProbeDecision:
+    """写权限探测响应的归类结果。"""
+
+    passed: bool
+    reason: str
+
+
+_AUTH_OR_PERMISSION_MARKERS = (
+    "10000",
+    "authentication error",
+    "permission",
+    "unauthorized",
+    "not authorized",
+    "forbidden",
+    "access denied",
+)
+
+_VALIDATION_MARKERS = (
+    "validation",
+    "schema",
+    "request body",
+    "body",
+    "field",
+    "required",
+    "missing",
+    "must",
+    "expected",
+    "parameter",
+    "payload",
+    "json",
+    "malformed",
+)
+
+_WORKERS_SCRIPT_NOT_FOUND_MARKERS = (
+    "script not found",
+    "no such script",
+    "could not find script",
+    "workers script not found",
+)
+
+
+def _body_to_text(body: object) -> str:
+    """将 CF 响应体转换为可检索文本。"""
+    if isinstance(body, dict) or isinstance(body, list):
+        return json.dumps(body, ensure_ascii=False)
+    return str(body)
+
+
+def _has_marker(text: str, markers: tuple[str, ...]) -> bool:
+    """判断文本是否包含任一标记。"""
+    lowered = text.lower()
+    return any(marker in lowered for marker in markers)
+
+
+def _has_error_source_pointer(body: object) -> bool:
+    """Cloudflare schema 错误通常会带 source.pointer。"""
+    if not isinstance(body, dict):
+        return False
+    for key in ("errors", "messages"):
+        items = body.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            source = item.get("source")
+            if isinstance(source, dict) and source.get("pointer"):
+                return True
+    return False
+
+
+def _classify_write_probe_response(
+    status_code: int,
+    body: object,
+    *,
+    validation_markers: tuple[str, ...] = (),
+    not_found_markers: tuple[str, ...] = (),
+) -> _ProbeDecision:
+    """将无效写请求的响应归类为通过或失败。
+
+    探测 payload 本身是无效的，因此只有明确进入业务层参数/资源校验时
+    才算通过；认证、权限、限流、服务端错误和未知响应一律失败。
+    """
+    text = _body_to_text(body)
+    if 200 <= status_code < 300:
+        return _ProbeDecision(
+            False,
+            "无效探测 payload 返回了成功响应，结果异常，已拒绝绑定。",
+        )
+    if status_code in {401, 403} or _has_marker(text, _AUTH_OR_PERMISSION_MARKERS):
+        return _ProbeDecision(
+            False,
+            "Token 无效、权限不足或资源范围未覆盖该 Account / Zone。",
+        )
+    if status_code == 429 or status_code >= 500:
+        return _ProbeDecision(
+            False,
+            "Cloudflare 暂时无法完成权限探测，请稍后重试。",
+        )
+    if status_code in {400, 404} and not_found_markers and _has_marker(
+        text, not_found_markers
+    ):
+        return _ProbeDecision(True, "已进入写接口资源校验阶段。")
+    all_validation_markers = _VALIDATION_MARKERS + validation_markers
+    if status_code == 400 and (
+        _has_error_source_pointer(body) or _has_marker(text, all_validation_markers)
+    ):
+        return _ProbeDecision(True, "已进入写接口参数校验阶段。")
+    return _ProbeDecision(
+        False,
+        "Cloudflare 返回未识别的权限探测结果，无法确认写权限完整。",
+    )
+
+
 class CloudflareClient:
     """单个 CF API Token 对应的异步客户端。
 
@@ -170,6 +286,39 @@ class CloudflareClient:
             raise CloudflareError(f"Cloudflare API 返回失败: {errors or body}")
         return body.get("result")
 
+    async def _run_invalid_write_probe(
+        self,
+        method: str,
+        path: str,
+        *,
+        payload: dict[str, Any],
+        capability_label: str,
+        validation_markers: tuple[str, ...] = (),
+        not_found_markers: tuple[str, ...] = (),
+    ) -> dict[str, str]:
+        """发送无效写请求，确认 Token 已进入写接口业务校验阶段。"""
+        resp = await self._raw_request(method, path, json=payload)
+        try:
+            body: object = resp.json()
+        except ValueError as exc:
+            raise CloudflareError(
+                f"{capability_label}权限探测失败：Cloudflare 返回非 JSON 响应 "
+                f"(HTTP {resp.status_code})"
+            ) from exc
+
+        decision = _classify_write_probe_response(
+            resp.status_code,
+            body,
+            validation_markers=validation_markers,
+            not_found_markers=not_found_markers,
+        )
+        if not decision.passed:
+            raise CloudflareError(
+                f"{capability_label}权限探测失败：{decision.reason} "
+                f"(HTTP {resp.status_code}): {body}"
+            )
+        return {"status": "ok"}
+
     # ---- Token 校验 ----
 
     async def verify_token(self) -> dict[str, Any]:
@@ -233,6 +382,20 @@ class CloudflareClient:
             "GET", f"/zones/{zone_id}/email/routing/rules"
         )
         return result if isinstance(result, list) else []
+
+    async def probe_email_routing_rules_write(
+        self, zone_id: str
+    ) -> dict[str, str]:
+        """无副作用探测 Email Routing 规则写权限。"""
+        if settings.CF_FAKE_MODE:
+            return {"status": "ok"}
+        return await self._run_invalid_write_probe(
+            "POST",
+            f"/zones/{zone_id}/email/routing/rules",
+            payload={},
+            capability_label="Email Routing 规则写",
+            validation_markers=("actions", "matchers", "routing rule", "rule"),
+        )
 
     async def create_routing_rule(
         self, zone_id: str, payload: dict[str, Any]
@@ -365,6 +528,20 @@ class CloudflareClient:
         )
         return result if isinstance(result, list) else []
 
+    async def probe_destination_addresses_write(
+        self, account_id: str
+    ) -> dict[str, str]:
+        """无副作用探测转发目标地址写权限，不发送验证邮件。"""
+        if settings.CF_FAKE_MODE:
+            return {"status": "ok"}
+        return await self._run_invalid_write_probe(
+            "POST",
+            f"/accounts/{account_id}/email/routing/addresses",
+            payload={},
+            capability_label="转发目标地址写",
+            validation_markers=("email", "address", "destination"),
+        )
+
     async def get_destination_address(
         self, account_id: str, address_id: str
     ) -> dict[str, Any]:
@@ -440,7 +617,55 @@ class CloudflareClient:
             body = {}
         return body if isinstance(body, dict) else {}
 
+    async def probe_email_sending_write(self, account_id: str) -> dict[str, str]:
+        """无副作用探测 Email Sending 写权限，不发送真实邮件。"""
+        if settings.CF_FAKE_MODE:
+            return {"status": "ok"}
+        return await self._run_invalid_write_probe(
+            "POST",
+            f"/accounts/{account_id}/email/sending/send",
+            payload={},
+            capability_label="Email Sending 发件写",
+            validation_markers=("from", "to", "subject", "email", "send"),
+        )
+
+    async def list_email_sending_subdomains(self, zone_id: str) -> list[dict[str, Any]]:
+        """列出 Zone 下 Email Sending subdomains，用于无副作用权限探测。"""
+        if settings.CF_FAKE_MODE:
+            return [{"name": "e2e.example.com", "status": "ready"}]
+        result = await self._request(
+            "GET", f"/zones/{zone_id}/email/sending/subdomains"
+        )
+        return result if isinstance(result, list) else []
+
     # ---- Workers Scripts：部署与 Secret ----
+
+    async def list_worker_scripts(self, account_id: str) -> list[dict[str, Any]]:
+        """列出账号下 Worker 脚本，用于无副作用权限探测。"""
+        if settings.CF_FAKE_MODE:
+            return [{"id": "cf-email-manager-webhook", "script_name": "cf-email-manager-webhook"}]
+        result = await self._request("GET", f"/accounts/{account_id}/workers/scripts")
+        return result if isinstance(result, list) else []
+
+    async def probe_worker_scripts_write(self, account_id: str) -> dict[str, Any]:
+        """探测 Workers Scripts 写权限，不创建或覆盖 Worker。
+
+        使用不存在的脚本名和空 secret payload 调用写接口。具备写权限时，
+        Cloudflare 会进入资源/参数校验并返回 4xx 校验类错误；缺少权限或
+        Token 无效时返回认证/权限错误。未知、限流和服务端错误不会放行。
+        """
+        if settings.CF_FAKE_MODE:
+            return {"status": "ok"}
+
+        probe_script = "cf-email-manager-permission-probe-never-create"
+        return await self._run_invalid_write_probe(
+            "PUT",
+            f"/accounts/{account_id}/workers/scripts/{probe_script}/secrets",
+            payload={},
+            capability_label="Cloudflare Workers Scripts 写",
+            validation_markers=("secret", "name", "text", "type"),
+            not_found_markers=_WORKERS_SCRIPT_NOT_FOUND_MARKERS,
+        )
 
     async def upload_worker_script(
         self,

@@ -23,6 +23,8 @@ def _format_dt(value: datetime | None) -> str:
     """模板过滤器 dt：将 datetime 格式化为 YYYY-MM-DD HH:MM。"""
     if value is None:
         return ""
+    if isinstance(value, str):
+        return value
     return value.strftime("%Y-%m-%d %H:%M")
 
 

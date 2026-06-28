@@ -11,8 +11,18 @@ from pydantic import ValidationError
 
 from app.dependencies import SessionDep
 from app.exceptions import AppException, NotFoundError
-from app.schemas.cf_account import CFAccountCreate, CFAccountRead, CFAccountUpdate
-from app.services import cf_account_service, domain_service, worker_deploy_service
+from app.schemas.cf_account import (
+    CFAccountCreate,
+    CFAccountRead,
+    CFAccountUpdate,
+    CFPermissionReport,
+)
+from app.services import (
+    cf_account_service,
+    cf_permission_service,
+    domain_service,
+    worker_deploy_service,
+)
 from app.web.deps import CurrentWebUser
 from app.web.templating import error_message, flash, render, render_error
 
@@ -20,12 +30,32 @@ router = APIRouter(tags=["前端-CF账号"])
 
 # 绑定 CF 账号所需的 API Token 权限（展示给用户参考）
 TOKEN_PERMISSIONS = [
-    ("Zone:Email Routing:Edit", "转发规则管理"),
-    ("Account:Email Routing Addresses:Edit", "目标地址管理"),
-    ("Account:Email Send:Edit", "发件 Beta 权限"),
-    ("Zone:Zone:Read", "读取域名信息"),
-    ("Account:Workers Scripts:Edit", "一键部署收件 Worker（使用一键部署功能时必需）"),
+    (item.required_permission, item.label, item.fix_hint)
+    for item in cf_permission_service.REQUIRED_TOKEN_PERMISSIONS
 ]
+
+TOKEN_SETUP_NOTES = [
+    "Token 资源范围必须覆盖要接入的 Account 和至少一个 Zone。",
+    "API Token 输入框只填写原始 Token，不要包含 Bearer 前缀。",
+    "如果 Token 配置了来源 IP 限制，请放行本服务的公网出口 IP。",
+    "Workers Scripts 编辑权限是必需项；没有该权限无法部署收件 Worker，也无法完整收发邮件。",
+]
+
+
+def _capability_report_context(
+    report: CFPermissionReport | dict[str, object] | None,
+) -> dict[str, object] | None:
+    """将权限报告转成模板安全的 dict。"""
+    if report is None:
+        return None
+    if isinstance(report, dict):
+        return report
+    return report.model_dump(mode="json")
+
+
+def _capability_report_from_exception(exc: AppException) -> dict[str, object] | None:
+    """从业务异常中提取权限检查报告。"""
+    return exc.data if isinstance(exc.data, dict) else None
 
 
 @router.get("/cf-accounts")
@@ -61,7 +91,9 @@ async def new_cf_account(request: Request, user: CurrentWebUser) -> Response:
         user=user,
         active="cf_accounts",
         permissions=TOKEN_PERMISSIONS,
+        setup_notes=TOKEN_SETUP_NOTES,
         form={},
+        capability_report=None,
     )
 
 
@@ -81,7 +113,7 @@ async def create_cf_account(
             api_token=api_token,
             account_id=account_id or None,
         )
-        await cf_account_service.bind_cf_account(session, user, data)
+        account = await cf_account_service.bind_cf_account(session, user, data)
     except (ValidationError, AppException) as exc:
         flash(request, error_message(exc), "error")
         return render(
@@ -91,13 +123,19 @@ async def create_cf_account(
             status_code=400,
             active="cf_accounts",
             permissions=TOKEN_PERMISSIONS,
+            setup_notes=TOKEN_SETUP_NOTES,
             form={
                 "name": name,
                 "account_id": account_id,
             },
+            capability_report=(
+                _capability_report_from_exception(exc)
+                if isinstance(exc, AppException)
+                else None
+            ),
         )
-    flash(request, "已成功绑定 CF 账号", "success")
-    return RedirectResponse("/cf-accounts", status_code=303)
+    flash(request, "已成功绑定 CF 账号，权限预检已通过", "success")
+    return RedirectResponse(f"/cf-accounts/{account.id}", status_code=303)
 
 
 @router.get("/cf-accounts/{account_id:int}")
@@ -114,12 +152,14 @@ async def cf_account_detail(
         )
     except NotFoundError:
         return render_error(request, 404, "CF 账号不存在", user=user)
+    account_read = CFAccountRead.model_validate(account)
     return render(
         request,
         "cf_accounts/detail.html",
         user=user,
         active="cf_accounts",
-        account=CFAccountRead.model_validate(account),
+        account=account_read,
+        capability_report=_capability_report_context(account_read.capability_report),
     )
 
 
@@ -148,13 +188,26 @@ async def edit_cf_account(
             api_token=api_token or None,
             is_active=is_active == "on",
         )
-        await cf_account_service.update_cf_account(session, account, update)
+        updated = await cf_account_service.update_cf_account(session, account, update)
     except (ValidationError, AppException) as exc:
         flash(request, error_message(exc), "error")
-        return RedirectResponse(f"/cf-accounts/{account_id}", status_code=303)
+        account_read = CFAccountRead.model_validate(account)
+        return render(
+            request,
+            "cf_accounts/detail.html",
+            user=user,
+            status_code=400,
+            active="cf_accounts",
+            account=account_read,
+            capability_report=(
+                _capability_report_from_exception(exc)
+                if isinstance(exc, AppException)
+                else _capability_report_context(account_read.capability_report)
+            ),
+        )
 
     flash(request, "已更新 CF 账号", "success")
-    return RedirectResponse(f"/cf-accounts/{account_id}", status_code=303)
+    return RedirectResponse(f"/cf-accounts/{updated.id}", status_code=303)
 
 
 @router.post("/cf-accounts/{account_id:int}/sync")
@@ -200,6 +253,32 @@ async def deploy_worker(
         f"Worker 「{result.worker_name}」已部署/更新（{len(result.domains)} 个域名）",
         "success",
     )
+    return RedirectResponse(f"/cf-accounts/{account_id}", status_code=303)
+
+
+@router.post("/cf-accounts/{account_id:int}/check-permissions")
+async def check_permissions(
+    request: Request,
+    user: CurrentWebUser,
+    session: SessionDep,
+    account_id: int,
+) -> Response:
+    """重新检查已绑定 CF 账号 Token 权限。"""
+    try:
+        account = await cf_account_service.get_cf_account_or_404(
+            session, account_id, user
+        )
+        report = await cf_permission_service.refresh_cf_account_permissions(
+            session, account
+        )
+    except AppException as exc:
+        flash(request, error_message(exc), "error")
+        return RedirectResponse(f"/cf-accounts/{account_id}", status_code=303)
+
+    if report.overall_status == "passed":
+        flash(request, "权限预检已通过", "success")
+    else:
+        flash(request, "权限预检未通过，请按检查结果修复 Token 设置", "warning")
     return RedirectResponse(f"/cf-accounts/{account_id}", status_code=303)
 
 

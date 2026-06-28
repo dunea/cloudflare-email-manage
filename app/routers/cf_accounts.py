@@ -9,14 +9,37 @@ from app.dependencies import CurrentUser, SessionDep
 from app.schemas.cf_account import (
     CFAccountCreate,
     CFAccountRead,
+    CFAccountTokenCheckRequest,
     CFAccountUpdate,
+    CFPermissionReport,
     WorkerDeployResult,
 )
 from app.schemas.common import ApiResponse, PageData
 from app.schemas.domain import DomainRead, DomainSyncResult
-from app.services import cf_account_service, domain_service, worker_deploy_service
+from app.services import (
+    cf_account_service,
+    cf_permission_service,
+    domain_service,
+    worker_deploy_service,
+)
 
 router = APIRouter(prefix="/cf-accounts", tags=["CF账号"])
+
+
+@router.post(
+    "/check-token",
+    response_model=ApiResponse[CFPermissionReport],
+    summary="绑定前检查 CF Token 权限",
+)
+async def check_token_permissions(
+    data: CFAccountTokenCheckRequest, current_user: CurrentUser
+) -> ApiResponse[CFPermissionReport]:
+    """检查未入库 Token 的核心权限，不保存 Token。"""
+    _ = current_user
+    result = await cf_permission_service.inspect_token_permissions(
+        data.api_token, data.account_id
+    )
+    return ApiResponse(data=result.report)
 
 
 @router.post(
@@ -89,6 +112,26 @@ async def update_cf_account(
     )
     updated = await cf_account_service.update_cf_account(session, cf_account, data)
     return ApiResponse(data=CFAccountRead.model_validate(updated))
+
+
+@router.post(
+    "/{account_id}/check-permissions",
+    response_model=ApiResponse[CFPermissionReport],
+    summary="重新检查已绑定 CF 账号权限",
+)
+async def check_cf_account_permissions(
+    account_id: int,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> ApiResponse[CFPermissionReport]:
+    """重新检查已绑定账号当前 Token 的核心权限，并保存检查报告。"""
+    cf_account = await cf_account_service.get_cf_account_or_404(
+        session, account_id, current_user
+    )
+    report = await cf_permission_service.refresh_cf_account_permissions(
+        session, cf_account
+    )
+    return ApiResponse(data=report)
 
 
 @router.delete(

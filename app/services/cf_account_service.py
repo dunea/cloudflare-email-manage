@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.exceptions import AppException, NotFoundError, PermissionError
 from app.models import CFAccount, User
 from app.schemas.cf_account import CFAccountCreate, CFAccountUpdate
+from app.services import cf_permission_service
 from app.services.cloudflare import CloudflareClient
 from app.services.crypto import decrypt_token, encrypt_token
 
@@ -63,20 +64,21 @@ async def _resolve_account_id(client: CloudflareClient, explicit: str | None) ->
 async def bind_cf_account(
     session: AsyncSession, user: User, data: CFAccountCreate
 ) -> CFAccount:
-    """绑定 CF 账号：校验 Token、自动获取 account_id、加密存储。"""
-    # 调用 CF 校验 Token（无效会抛出 CloudflareError）
-    client = CloudflareClient(data.api_token)
-    await client.verify_token()
-
-    # 自动获取 account_id（用户未传时从 CF API 拉取）
-    account_id = await _resolve_account_id(client, data.account_id)
+    """绑定 CF 账号：强校验核心权限、自动获取 account_id、加密存储。"""
+    check = await cf_permission_service.inspect_token_permissions(
+        data.api_token, data.account_id
+    )
+    cf_permission_service.ensure_report_passed(check.report)
+    if check.account_id is None:
+        raise AppException("无法解析 Cloudflare Account ID", code=1400)
 
     cf_account = CFAccount(
         user_id=user.id,
         name=data.name,
-        encrypted_api_token=encrypt_token(data.api_token),
-        account_id=account_id,
+        encrypted_api_token=encrypt_token(check.api_token),
+        account_id=check.account_id,
     )
+    cf_permission_service.store_report(cf_account, check.report)
     session.add(cf_account)
     await session.commit()
     await session.refresh(cf_account)
@@ -121,17 +123,24 @@ async def list_cf_accounts(
 async def update_cf_account(
     session: AsyncSession, cf_account: CFAccount, data: CFAccountUpdate
 ) -> CFAccount:
-    """更新 CF 账号；若提供新 Token 则重新校验、自动获取 account_id 并加密存储。"""
+    """更新 CF 账号；若提供新 Token 则按原 account_id 重新校验后加密存储。"""
     if data.name is not None:
         cf_account.name = data.name
     if data.is_active is not None:
         cf_account.is_active = data.is_active
     if data.api_token is not None:
-        client = CloudflareClient(data.api_token)
-        await client.verify_token()
-        cf_account.encrypted_api_token = encrypt_token(data.api_token)
-        # 更新 Token 后自动刷新 account_id
-        cf_account.account_id = await _resolve_account_id(client, None)
+        check = await cf_permission_service.inspect_token_permissions(
+            data.api_token, cf_account.account_id
+        )
+        cf_permission_service.ensure_report_passed(check.report)
+        if check.account_id != cf_account.account_id:
+            raise AppException(
+                "新 Token 属于或覆盖的是另一个 Cloudflare Account；"
+                "请为当前 Account 重新创建 Token，或新增绑定账号。",
+                code=1403,
+            )
+        cf_account.encrypted_api_token = encrypt_token(check.api_token)
+        cf_permission_service.store_report(cf_account, check.report)
 
     await session.commit()
     await session.refresh(cf_account)

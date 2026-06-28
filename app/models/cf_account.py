@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -27,6 +28,11 @@ class CFAccount(Base):
     encrypted_api_token: Mapped[str] = mapped_column(Text)
     # CF 账号 ID（account_id，绑定时自动获取）
     account_id: Mapped[str] = mapped_column(String(64))
+    # 最近一次 Cloudflare Token 权限预检报告（JSON 文本，不含 Token）
+    capability_report_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    capability_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -38,3 +44,14 @@ class CFAccount(Base):
     domains: Mapped[list[Domain]] = relationship(
         back_populates="cf_account", cascade="all, delete-orphan"
     )
+
+    @property
+    def capability_report(self) -> dict[str, object] | None:
+        """返回最近一次权限预检报告，用于 Pydantic 响应序列化。"""
+        if not self.capability_report_json:
+            return None
+        try:
+            parsed = json.loads(self.capability_report_json)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None

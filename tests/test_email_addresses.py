@@ -43,7 +43,7 @@ def _auth(token: str) -> dict[str, str]:
 
 
 def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mock CloudflareClient 的 verify_token 与 list_zones。"""
+    """Mock CloudflareClient 的绑定预检与域名同步调用。"""
 
     async def _fake_verify(self: CloudflareClient) -> dict[str, str]:
         return {"status": "active"}
@@ -53,8 +53,68 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> None:
     ) -> list[dict[str, str]]:
         return ZONES
 
+    async def _fake_list_routing_rules(
+        self: CloudflareClient, zone_id: str
+    ) -> list[dict[str, object]]:
+        return []
+
+    async def _fake_list_destinations(
+        self: CloudflareClient, account_id: str
+    ) -> list[dict[str, object]]:
+        return []
+
+    async def _fake_list_email_sending(
+        self: CloudflareClient, account_id: str
+    ) -> list[dict[str, object]]:
+        return []
+
+    async def _fake_probe_email_routing_rules_write(
+        self: CloudflareClient, zone_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _fake_probe_destination_addresses_write(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _fake_probe_email_sending_write(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _fake_probe_worker_scripts_write(
+        self: CloudflareClient, account_id: str
+    ) -> dict[str, str]:
+        return {"status": "ok"}
+
     monkeypatch.setattr(CloudflareClient, "verify_token", _fake_verify)
     monkeypatch.setattr(CloudflareClient, "list_zones", _fake_list_zones)
+    monkeypatch.setattr(CloudflareClient, "list_routing_rules", _fake_list_routing_rules)
+    monkeypatch.setattr(
+        CloudflareClient, "list_destination_addresses", _fake_list_destinations
+    )
+    monkeypatch.setattr(
+        CloudflareClient, "list_email_sending_subdomains", _fake_list_email_sending
+    )
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_email_routing_rules_write",
+        _fake_probe_email_routing_rules_write,
+    )
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_destination_addresses_write",
+        _fake_probe_destination_addresses_write,
+    )
+    monkeypatch.setattr(
+        CloudflareClient, "probe_email_sending_write", _fake_probe_email_sending_write
+    )
+    monkeypatch.setattr(
+        CloudflareClient,
+        "probe_worker_scripts_write",
+        _fake_probe_worker_scripts_write,
+    )
 
 
 async def _bind(client: AsyncClient, token: str) -> int:
