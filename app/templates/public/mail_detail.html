@@ -10,6 +10,18 @@
   <script>
     tailwind.config = { theme: { extend: { colors: { brand: { DEFAULT: "#f6821f", dark: "#d9730d" } } } } };
   </script>
+  <style>
+    .break-anywhere{overflow-wrap:anywhere;word-break:break-word;}
+    .mail-body-pane{display:none;}
+    #body-view-html:checked ~ .mail-body-panes [data-mail-body-pane="html"],
+    #body-view-text:checked ~ .mail-body-panes [data-mail-body-pane="text"]{display:block;}
+    #body-view-html:checked ~ .mail-body-tabs label[for="body-view-html"],
+    #body-view-text:checked ~ .mail-body-tabs label[for="body-view-text"]{
+      border-color:#f6821f;
+      background:#f6821f;
+      color:#fff;
+    }
+  </style>
 </head>
 <body class="min-h-screen bg-slate-50 text-slate-800 antialiased">
   <div class="mx-auto w-full max-w-5xl px-4 py-8">
@@ -28,30 +40,53 @@
       <div class="mb-5 border-b border-slate-100 pb-5">
         <h2 class="text-xl font-semibold text-slate-900">{{ email.subject or "(无主题)" }}</h2>
         <dl class="mt-4 grid gap-2 text-sm sm:grid-cols-2">
-          <div><dt class="inline text-slate-500">发件人：</dt><dd class="inline font-mono text-slate-700">{% if email.from_name %}{{ email.from_name }} &lt;{{ email.from_address }}&gt;{% else %}{{ email.from_address }}{% endif %}</dd></div>
-          <div><dt class="inline text-slate-500">收件地址：</dt><dd class="inline font-mono text-slate-700">{{ email.to_address }}</dd></div>
-          {% if email.envelope_from %}<div><dt class="inline text-slate-500">信封发件人：</dt><dd class="inline font-mono text-slate-700">{{ email.envelope_from }}</dd></div>{% endif %}
-          {% if email.reply_to %}<div><dt class="inline text-slate-500">回复地址：</dt><dd class="inline font-mono text-slate-700">{{ email.reply_to }}</dd></div>{% endif %}
+          <div><dt class="inline text-slate-500">发件人：</dt><dd class="break-anywhere inline font-mono text-slate-700">{% if email.from_name %}{{ email.from_name }} &lt;{{ email.from_address }}&gt;{% else %}{{ email.from_address }}{% endif %}</dd></div>
+          <div><dt class="inline text-slate-500">收件地址：</dt><dd class="break-anywhere inline font-mono text-slate-700">{{ email.to_address }}</dd></div>
+          {% if email.envelope_from %}<div><dt class="inline text-slate-500">信封发件人：</dt><dd class="break-anywhere inline font-mono text-slate-700">{{ email.envelope_from }}</dd></div>{% endif %}
+          {% if email.reply_to %}<div><dt class="inline text-slate-500">回复地址：</dt><dd class="break-anywhere inline font-mono text-slate-700">{{ email.reply_to }}</dd></div>{% endif %}
           {% if email.message_id %}<div><dt class="inline text-slate-500">Message-ID：</dt><dd class="inline break-all font-mono text-xs text-slate-700">{{ email.message_id }}</dd></div>{% endif %}
           <div><dt class="inline text-slate-500">接收时间：</dt><dd class="inline text-slate-700">{{ email.received_at | dt }}</dd></div>
         </dl>
       </div>
 
-      {% if email.body_text %}
-      <div class="mb-6">
-        <h3 class="mb-2 text-sm font-semibold text-slate-500">纯文本正文</h3>
-        <pre class="overflow-x-auto whitespace-pre-wrap rounded-lg bg-slate-50 p-4 text-sm text-slate-800">{{ email.body_text }}</pre>
-      </div>
-      {% endif %}
+      {% if body_view.default_mode != "empty" %}
+      <div class="mail-body-switch">
+        {% if body_view.html_content %}
+        <input id="body-view-html" name="body-view" type="radio" class="sr-only" {% if body_view.default_mode == "html" %}checked{% endif %} />
+        {% endif %}
+        {% if body_view.text_content %}
+        <input id="body-view-text" name="body-view" type="radio" class="sr-only" {% if body_view.default_mode == "text" %}checked{% endif %} />
+        {% endif %}
 
-      {% if email.body_html %}
-      <div>
-        <h3 class="mb-2 text-sm font-semibold text-slate-500">HTML 预览（沙箱隔离，禁用脚本）</h3>
-        <iframe sandbox class="h-96 w-full rounded-lg border border-slate-200" srcdoc="{{ email.body_html }}"></iframe>
-      </div>
-      {% endif %}
+        {% if body_view.html_content and body_view.text_content %}
+        <div class="mail-body-tabs mb-4 inline-flex rounded-lg border border-slate-200 bg-white p-1 text-sm">
+          <label for="body-view-html" class="cursor-pointer rounded-md border border-transparent px-3 py-1.5 font-medium text-slate-600 hover:bg-slate-50">{{ body_view.html_label }}</label>
+          <label for="body-view-text" class="cursor-pointer rounded-md border border-transparent px-3 py-1.5 font-medium text-slate-600 hover:bg-slate-50">{{ body_view.text_label }}</label>
+        </div>
+        {% else %}
+        <h3 class="mb-2 text-sm font-semibold text-slate-500">
+          {% if body_view.html_content %}{{ body_view.html_label }}（沙箱隔离，禁用脚本）{% else %}{{ body_view.text_label }}{% endif %}
+        </h3>
+        {% endif %}
 
-      {% if not email.body_text and not email.body_html %}
+        <div class="mail-body-panes">
+          {% if body_view.html_content %}
+          <div class="mail-body-pane" data-mail-body-pane="html">
+            {% if body_view.html_content and body_view.text_content %}
+            <p class="mb-2 text-xs text-slate-400">HTML 预览已沙箱隔离，脚本不会执行。</p>
+            {% endif %}
+            <iframe sandbox class="h-96 w-full rounded-lg border border-slate-200 bg-white" srcdoc="{{ body_view.html_content }}"></iframe>
+          </div>
+          {% endif %}
+
+          {% if body_view.text_content %}
+          <div class="mail-body-pane" data-mail-body-pane="text">
+            <pre class="break-anywhere max-w-full whitespace-pre-wrap rounded-lg bg-slate-50 p-4 text-sm leading-6 text-slate-800">{{ body_view.text_content }}</pre>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% else %}
       <p class="text-sm text-slate-400">（无正文内容）</p>
       {% endif %}
     </article>

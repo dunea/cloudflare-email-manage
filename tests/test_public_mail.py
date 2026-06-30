@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import InboundEmail, OutboundEmail
 from app.services.cloudflare import CloudflareClient
+from app.web.public_mail import _PUBLIC_PREVIEW_LENGTH, _PUBLIC_PREVIEW_SCAN_LENGTH
 
 ZONES = [{"id": "zone1", "name": "example.com", "status": "active"}]
 
@@ -272,6 +273,11 @@ async def test_html_endpoint_returns_page(
     assert "收件箱（1）" in resp.text
     assert "发件箱（0）" in resp.text
     assert "发件" in resp.text
+    assert (
+        f'href="/mail/{public_token}.txt" target="_blank" '
+        'rel="noopener noreferrer"'
+    ) in resp.text
+    assert "break-anywhere" in resp.text
 
 
 async def test_public_mail_inbox_lists_preview_and_detail(
@@ -309,6 +315,258 @@ async def test_public_mail_inbox_lists_preview_and_detail(
     detail = await client.get(f"/mail/{public_token}/inbound/{email.id}")
     assert detail.status_code == 200
     assert "VISIBLE_END" in detail.text
+
+
+async def test_public_mail_listing_wraps_long_html_like_preview(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """公开收件箱列表对 HTML-like 文本提取可读预览，并保留长文本断行样式。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    public_token = await _setup(client, token, db_session)
+    long_url = "https://example.com/" + ("a" * 220)
+    await _post_webhook(
+        client,
+        {
+            "to": "hello@example.com",
+            "from": "sender@external.com",
+            "subject": "HTML-like 预览",
+            "text": f'<div>Readable content <a href="{long_url}">Open link</a></div>',
+        },
+    )
+
+    listing = await client.get(f"/mail/{public_token}")
+
+    assert listing.status_code == 200
+    assert "Readable content Open link" in listing.text
+    assert "&lt;div&gt;" not in listing.text
+    assert 'class="break-anywhere mb-4 rounded-lg' in listing.text
+
+
+async def test_public_mail_listing_limits_large_html_preview_scan(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """大 HTML 前段有可读文本时，列表只展示短预览，不受后续巨大内容影响。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    public_token = await _setup(client, token, db_session)
+    await _post_webhook(
+        client,
+        {
+            "to": "hello@example.com",
+            "from": "sender@external.com",
+            "subject": "大 HTML 预览",
+            "html": (
+                "<html><body><p>Early visible preview</p>"
+                f"<p>{'tail ' * (_PUBLIC_PREVIEW_SCAN_LENGTH // 5)}</p>"
+                "<p>UNREACHABLE_TAIL</p></body></html>"
+            ),
+        },
+    )
+
+    listing = await client.get(f"/mail/{public_token}")
+
+    assert listing.status_code == 200
+    assert "Early visible preview" in listing.text
+    assert "UNREACHABLE_TAIL" not in listing.text
+
+
+async def test_public_mail_listing_falls_back_when_html_text_is_after_scan_limit(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HTML 可读文本在扫描上限之后时，列表不全量解析后半段。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    public_token = await _setup(client, token, db_session)
+    await _post_webhook(
+        client,
+        {
+            "to": "hello@example.com",
+            "from": "sender@external.com",
+            "subject": "后置 HTML 正文",
+            "html": (
+                f"<style>{'x' * (_PUBLIC_PREVIEW_SCAN_LENGTH + 1024)}</style>"
+                "<p>LATE_VISIBLE_TEXT</p>"
+            ),
+        },
+    )
+
+    listing = await client.get(f"/mail/{public_token}")
+
+    assert listing.status_code == 200
+    assert "HTML 正文，点击查看完整内容" in listing.text
+    assert "LATE_VISIBLE_TEXT" not in listing.text
+
+
+async def test_public_mail_listing_limits_long_plain_text_preview(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """超长纯文本列表预览仍只返回短摘要。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    public_token = await _setup(client, token, db_session)
+    long_body = "TEXT_START " + ("x" * (_PUBLIC_PREVIEW_SCAN_LENGTH + 1024))
+    await _post_webhook(
+        client,
+        {
+            "to": "hello@example.com",
+            "from": "sender@external.com",
+            "subject": "超长纯文本",
+            "text": f"{long_body} TEXT_END",
+        },
+    )
+
+    listing = await client.get(f"/mail/{public_token}")
+
+    assert listing.status_code == 200
+    assert "TEXT_START" in listing.text
+    assert "TEXT_END" not in listing.text
+    assert ("TEXT_START " + ("x" * (_PUBLIC_PREVIEW_LENGTH - 20))) in listing.text
+    assert "..." in listing.text
+
+
+async def test_public_mail_listing_does_not_scan_late_html_like_text(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """body_text 的 HTML 标签在扫描上限之后时，列表按纯文本短摘要处理。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    public_token = await _setup(client, token, db_session)
+    late_html_text = (
+        "PLAIN_PREFIX "
+        + ("x" * (_PUBLIC_PREVIEW_SCAN_LENGTH + 1024))
+        + "<p>LATE_HTML_VISIBLE_TEXT</p>"
+    )
+    await _post_webhook(
+        client,
+        {
+            "to": "hello@example.com",
+            "from": "sender@external.com",
+            "subject": "后置 HTML-like text",
+            "text": late_html_text,
+        },
+    )
+
+    listing = await client.get(f"/mail/{public_token}")
+
+    assert listing.status_code == 200
+    assert "PLAIN_PREFIX" in listing.text
+    assert "LATE_HTML_VISIBLE_TEXT" not in listing.text
+    assert "HTML 正文，点击查看完整内容" not in listing.text
+    assert "..." in listing.text
+
+
+async def test_public_mail_listing_extracts_large_html_like_text_within_scan_limit(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """body_text 前缀内是 HTML-like 时，列表仍提取可读 HTML 预览。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    public_token = await _setup(client, token, db_session)
+    await _post_webhook(
+        client,
+        {
+            "to": "hello@example.com",
+            "from": "sender@external.com",
+            "subject": "前置 HTML-like text",
+            "text": (
+                "<article><p>Early HTML-like text preview</p></article>"
+                + ("x" * (_PUBLIC_PREVIEW_SCAN_LENGTH + 1024))
+            ),
+        },
+    )
+
+    listing = await client.get(f"/mail/{public_token}")
+
+    assert listing.status_code == 200
+    assert "Early HTML-like text preview" in listing.text
+    assert "&lt;article&gt;" not in listing.text
+
+
+async def test_public_mail_detail_defaults_to_html_preview_with_text_fallback(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """详情页同时有文本和 HTML 时，默认只展示 HTML 预览并提供文本切换。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    public_token = await _setup(client, token, db_session)
+    await _post_webhook(
+        client,
+        {
+            "to": "hello@example.com",
+            "from": "sender@external.com",
+            "subject": "HTML 详情",
+            "text": "Plain body",
+            "html": "<p><strong>HTML body</strong></p>",
+        },
+    )
+    email = (
+        await db_session.execute(
+            select(InboundEmail).where(InboundEmail.subject == "HTML 详情")
+        )
+    ).scalar_one()
+
+    detail = await client.get(f"/mail/{public_token}/inbound/{email.id}")
+
+    assert detail.status_code == 200
+    assert (
+        'id="body-view-html" name="body-view" type="radio" '
+        'class="sr-only" checked'
+    ) in detail.text
+    assert 'data-mail-body-pane="html"' in detail.text
+    assert 'data-mail-body-pane="text"' in detail.text
+    assert "HTML 预览已沙箱隔离" in detail.text
+    assert "纯文本正文</label>" in detail.text
+    assert "mail-body-pane{display:none;}" in detail.text
+
+
+async def test_public_mail_detail_treats_html_like_text_as_html_preview(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """只有 body_text 且内容像 HTML 时，详情页默认使用 HTML 预览。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    public_token = await _setup(client, token, db_session)
+    await _post_webhook(
+        client,
+        {
+            "to": "hello@example.com",
+            "from": "sender@external.com",
+            "subject": "HTML 存在 text",
+            "text": "<html><body><p>Text stores HTML</p></body></html>",
+        },
+    )
+    email = (
+        await db_session.execute(
+            select(InboundEmail).where(InboundEmail.subject == "HTML 存在 text")
+        )
+    ).scalar_one()
+
+    detail = await client.get(f"/mail/{public_token}/inbound/{email.id}")
+
+    assert detail.status_code == 200
+    assert (
+        'id="body-view-html" name="body-view" type="radio" '
+        'class="sr-only" checked'
+    ) in detail.text
+    assert "源码文本</label>" in detail.text
+    assert 'srcdoc="&lt;html&gt;&lt;body&gt;&lt;p&gt;Text stores HTML' in detail.text
 
 
 async def test_public_mail_detail_rejects_other_address_email(

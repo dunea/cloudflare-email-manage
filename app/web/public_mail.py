@@ -7,7 +7,10 @@
 令牌为 EmailAddress.public_token（无符号 uuid）。停用或已删除的邮箱不可访问。
 """
 
-from typing import Annotated
+import re
+from html import unescape
+from html.parser import HTMLParser
+from typing import Annotated, Literal, TypedDict
 
 from fastapi import APIRouter, Form, Query, Request, Response
 from fastapi.responses import PlainTextResponse, RedirectResponse
@@ -26,6 +29,81 @@ from app.web.templating import error_message, flash, render, render_error
 router = APIRouter(tags=["前端-公开邮件"])
 
 _PUBLIC_PREVIEW_LENGTH = 180
+_PUBLIC_PREVIEW_SCAN_LENGTH = 64 * 1024
+_PUBLIC_PREVIEW_TEXT_LIMIT = _PUBLIC_PREVIEW_LENGTH + 64
+_HTML_TAG_RE = re.compile(
+    r"<\s*/?\s*[a-z][a-z0-9:-]*(?:\s+[^<>]*)?>",
+    re.IGNORECASE,
+)
+_HTML_BREAK_TAGS = {"br", "p", "div", "li", "tr", "td", "th", "section", "article"}
+_HTML_IGNORED_TAGS = {"script", "style", "noscript"}
+
+BodyViewMode = Literal["html", "text", "empty"]
+
+
+class PublicMailBodyView(TypedDict):
+    """公开邮件详情页正文展示策略。"""
+
+    default_mode: BodyViewMode
+    html_content: str | None
+    text_content: str | None
+    html_label: str
+    text_label: str
+
+
+class _PreviewLimitReached(Exception):
+    """HTML 预览文本已足够，提前停止解析。"""
+
+
+class _HTMLTextExtractor(HTMLParser):
+    """从 HTML 正文中提取适合列表预览的可读文本。"""
+
+    def __init__(self, max_text_length: int) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._ignored_depth = 0
+        self._text_length = 0
+        self._max_text_length = max_text_length
+
+    def _append_text(self, text: str) -> None:
+        """追加可见文本，达到上限后停止解析。"""
+        if not text:
+            return
+        remaining = self._max_text_length - self._text_length
+        if remaining <= 0:
+            raise _PreviewLimitReached
+        chunk = text[:remaining]
+        self._parts.append(chunk)
+        self._text_length += len(chunk)
+        if len(text) > remaining:
+            raise _PreviewLimitReached
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        tag_name = tag.lower()
+        if tag_name in _HTML_IGNORED_TAGS:
+            self._ignored_depth += 1
+            return
+        if self._ignored_depth:
+            return
+        if tag_name in _HTML_BREAK_TAGS:
+            self._append_text(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in _HTML_IGNORED_TAGS and self._ignored_depth:
+            self._ignored_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._ignored_depth:
+            return
+        text = data.strip()
+        if text:
+            self._append_text(text)
+
+    def text(self) -> str:
+        """返回已压缩空白的纯文本。"""
+        return " ".join(" ".join(self._parts).split())
 
 
 async def _resolve_by_token(
@@ -57,6 +135,43 @@ def _parse_recipients(raw: str) -> list[str]:
     return [addr.strip() for addr in normalized.split(",") if addr.strip()]
 
 
+def _looks_like_html(
+    value: str | None, scan_length: int = _PUBLIC_PREVIEW_SCAN_LENGTH
+) -> bool:
+    """粗略判断文本正文是否实际存放了 HTML。"""
+    if not value:
+        return False
+    sample = value[:scan_length]
+    if "<" not in sample or ">" not in sample:
+        return False
+    leading = sample.lstrip()
+    return leading[:9].lower() == "<!doctype" or bool(_HTML_TAG_RE.search(sample))
+
+
+def _html_to_text(value: str) -> str:
+    """把 HTML 片段转换为列表预览文本。"""
+    limited = value[:_PUBLIC_PREVIEW_SCAN_LENGTH]
+    parser = _HTMLTextExtractor(_PUBLIC_PREVIEW_TEXT_LIMIT)
+    try:
+        parser.feed(limited)
+        parser.close()
+    except _PreviewLimitReached:
+        return parser.text()
+    except Exception:
+        stripped = _HTML_TAG_RE.sub(" ", limited)
+        return " ".join(unescape(stripped).split())
+    return parser.text()
+
+
+def _truncate_preview(text: str) -> str:
+    """压缩并截断公开收件箱预览。"""
+    limited = text[:_PUBLIC_PREVIEW_SCAN_LENGTH]
+    normalized = " ".join(limited.split())
+    if len(normalized) > _PUBLIC_PREVIEW_LENGTH:
+        return f"{normalized[:_PUBLIC_PREVIEW_LENGTH].rstrip()}..."
+    return normalized
+
+
 def _hit_public_send_limit(request: Request, token: str) -> None:
     """公开邮件发件独立限流，降低 token 泄露后的滥用风险。"""
     ip = client_ip(request)
@@ -77,13 +192,51 @@ def _hit_public_send_limit(request: Request, token: str) -> None:
 def _inbound_preview(email: InboundEmail) -> str:
     """生成公开收件箱列表预览，避免列表渲染完整正文。"""
     if email.body_text:
-        text = " ".join(email.body_text.split())
-        if len(text) > _PUBLIC_PREVIEW_LENGTH:
-            return f"{text[:_PUBLIC_PREVIEW_LENGTH].rstrip()}..."
-        return text
+        if _looks_like_html(email.body_text):
+            text = _html_to_text(email.body_text)
+            return _truncate_preview(text) or "HTML 正文，点击查看完整内容"
+        return _truncate_preview(email.body_text)
     if email.body_html:
-        return "HTML 正文，点击查看完整内容"
+        text = _html_to_text(email.body_html)
+        return _truncate_preview(text) or "HTML 正文，点击查看完整内容"
     return ""
+
+
+def _mail_body_view(email: InboundEmail) -> PublicMailBodyView:
+    """决定公开详情页默认展示 HTML 预览还是纯文本。"""
+    text = email.body_text
+    html = email.body_html
+    if html:
+        return {
+            "default_mode": "html",
+            "html_content": html,
+            "text_content": text,
+            "html_label": "HTML 预览",
+            "text_label": "纯文本正文",
+        }
+    if text and _looks_like_html(text):
+        return {
+            "default_mode": "html",
+            "html_content": text,
+            "text_content": text,
+            "html_label": "HTML 预览",
+            "text_label": "源码文本",
+        }
+    if text:
+        return {
+            "default_mode": "text",
+            "html_content": None,
+            "text_content": text,
+            "html_label": "HTML 预览",
+            "text_label": "纯文本正文",
+        }
+    return {
+        "default_mode": "empty",
+        "html_content": None,
+        "text_content": None,
+        "html_label": "HTML 预览",
+        "text_label": "纯文本正文",
+    }
 
 
 def _inbound_list_item(email: InboundEmail) -> dict[str, object]:
@@ -185,6 +338,7 @@ async def public_mail_inbound_detail(
         address=address.full_address,
         token=token,
         email=InboundEmailRead.model_validate(email),
+        body_view=_mail_body_view(email),
     )
 
 
