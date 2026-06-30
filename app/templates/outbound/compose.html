@@ -2,7 +2,8 @@
 {% block title %}发件 · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="mb-6">
-  <h1 class="text-2xl font-semibold text-slate-900">发件</h1>
+  <a href="/outbound" class="text-sm text-slate-500 hover:text-brand">← 返回发件箱</a>
+  <h1 class="mt-2 text-2xl font-semibold text-slate-900">撰写邮件</h1>
   <p class="mt-1 text-sm text-slate-500">通过 Cloudflare Email Sending（Beta）从你的受管邮箱地址发送</p>
 </div>
 
@@ -10,17 +11,24 @@
   注意：CF Email Sending 目前为 <strong>Beta</strong>，免费额度约 <strong>1000 封/天</strong>。
 </div>
 
-{% if senders %}
-<form method="post" action="/outbound" class="max-w-2xl space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+{% if not senders %}
+<div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+  没有可用的发件地址建议。请先在「邮箱地址」创建并启用邮箱地址。
+</div>
+{% endif %}
+
+<form method="post" action="/outbound/compose" class="max-w-2xl space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
   <div>
     <label class="mb-1 block text-sm font-medium text-slate-700">发件人</label>
-    <select name="from_address" required
-            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+    <input name="from_address" required list="sender-suggestions" value="{{ form.from_address | default('') }}" placeholder="hello@example.com"
+           class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+    <datalist id="sender-suggestions">
       {% for s in senders %}
-      <option value="{{ s.full_address }}" {% if form.from_address == s.full_address %}selected{% endif %}>{{ s.full_address }}</option>
+      <option value="{{ s.full_address }}"></option>
       {% endfor %}
-    </select>
+    </datalist>
+    <p class="mt-1 text-xs text-slate-400">可输入任意你已启用的受管邮箱地址；下拉仅显示最近 25 个建议。</p>
   </div>
   <div>
     <label class="mb-1 block text-sm font-medium text-slate-700">收件人</label>
@@ -45,9 +53,4 @@
   </div>
   <button type="submit" class="rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark">发送邮件</button>
 </form>
-{% else %}
-<div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-  没有可用的发件地址。请先在「邮箱地址」创建并启用一个邮箱地址。
-</div>
-{% endif %}
 {% endblock %}

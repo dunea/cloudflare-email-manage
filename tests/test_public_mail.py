@@ -11,9 +11,11 @@ import json
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.models import InboundEmail, OutboundEmail
 from app.services.cloudflare import CloudflareClient
 
 ZONES = [{"id": "zone1", "name": "example.com", "status": "active"}]
@@ -141,6 +143,27 @@ def _patch_cf(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+class _SendCalls:
+    """记录公开发件调用。"""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, dict[str, object]]] = []
+
+
+def _patch_send(monkeypatch: pytest.MonkeyPatch) -> _SendCalls:
+    """Mock Cloudflare 发件调用。"""
+    calls = _SendCalls()
+
+    async def _send(
+        self: CloudflareClient, account_id: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        calls.sent.append((account_id, payload))
+        return {"id": "public-msg-1"}
+
+    monkeypatch.setattr(CloudflareClient, "send_email", _send)
+    return calls
+
+
 async def _setup(
     client: AsyncClient,
     token: str,
@@ -246,6 +269,137 @@ async def test_html_endpoint_returns_page(
     assert "hello@example.com" in resp.text
     assert "sender@external.com" in resp.text
     assert "HTML测试" in resp.text
+    assert "收件箱（1）" in resp.text
+    assert "发件箱（0）" in resp.text
+    assert "发件" in resp.text
+
+
+async def test_public_mail_inbox_lists_preview_and_detail(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """公开收件箱列表只展示预览，完整正文在详情页展示。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    public_token = await _setup(client, token, db_session)
+    long_body = "VISIBLE_START " + ("正文" * 160) + " VISIBLE_END"
+    await _post_webhook(
+        client,
+        {
+            "to": "hello@example.com",
+            "from": "sender@external.com",
+            "subject": "长正文",
+            "text": long_body,
+        },
+    )
+    email = (
+        await db_session.execute(
+            select(InboundEmail).where(InboundEmail.subject == "长正文")
+        )
+    ).scalar_one()
+
+    listing = await client.get(f"/mail/{public_token}")
+    assert listing.status_code == 200
+    assert "VISIBLE_START" in listing.text
+    assert "VISIBLE_END" not in listing.text
+    assert f"/mail/{public_token}/inbound/{email.id}" in listing.text
+    assert "查看" in listing.text
+
+    detail = await client.get(f"/mail/{public_token}/inbound/{email.id}")
+    assert detail.status_code == 200
+    assert "VISIBLE_END" in detail.text
+
+
+async def test_public_mail_detail_rejects_other_address_email(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """公开详情页只能查看 token 对应邮箱地址的邮件。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    public_token = await _setup(client, token, db_session)
+    await _post_webhook(
+        client,
+        {
+            "to": "other@example.com",
+            "from": "sender@external.com",
+            "subject": "Other mailbox",
+            "text": "Should stay hidden",
+        },
+    )
+    other_email = (
+        await db_session.execute(
+            select(InboundEmail).where(InboundEmail.subject == "Other mailbox")
+        )
+    ).scalar_one()
+
+    resp = await client.get(f"/mail/{public_token}/inbound/{other_email.id}")
+    assert resp.status_code == 404
+    assert "Should stay hidden" not in resp.text
+
+
+async def test_public_mail_send_uses_token_address(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """公开链接发件时固定从 token 对应邮箱发送，并写入发件箱。"""
+    _patch_cf(monkeypatch)
+    calls = _patch_send(monkeypatch)
+    token = await _register_and_login(client)
+    public_token = await _setup(client, token, db_session)
+
+    resp = await client.post(
+        f"/mail/{public_token}/send",
+        data={
+            "from_address": "attacker@example.com",
+            "to": "dest@example.com",
+            "subject": "公开发件",
+            "text": "正文",
+        },
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 303
+    assert resp.headers["location"] == f"/mail/{public_token}?tab=outbound"
+    assert len(calls.sent) == 1
+    _account_id, payload = calls.sent[0]
+    assert payload["from"] == "hello@example.com"
+    assert payload["to"] == ["dest@example.com"]
+
+    record = (await db_session.execute(select(OutboundEmail))).scalar_one()
+    assert record.from_address == "hello@example.com"
+    assert record.status == "sent"
+
+    page = await client.get(f"/mail/{public_token}?tab=outbound")
+    assert "发件箱（1）" in page.text
+    assert "公开发件" in page.text
+
+
+async def test_public_mail_send_rate_limit(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """公开发件有独立限流。"""
+    _patch_cf(monkeypatch)
+    _patch_send(monkeypatch)
+    monkeypatch.setattr(settings, "PUBLIC_MAIL_SEND_RATE_LIMIT_ATTEMPTS", 1)
+    monkeypatch.setattr(settings, "PUBLIC_MAIL_SEND_RATE_LIMIT_WINDOW_SECONDS", 60)
+    token = await _register_and_login(client)
+    public_token = await _setup(client, token, db_session)
+    payload = {
+        "to": "dest@example.com",
+        "subject": "限流",
+        "text": "正文",
+    }
+
+    first = await client.post(f"/mail/{public_token}/send", data=payload)
+    assert first.status_code == 303
+    second = await client.post(f"/mail/{public_token}/send", data=payload)
+    assert second.status_code == 429
 
 
 async def test_text_endpoint_empty_mailbox(

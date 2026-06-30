@@ -8,6 +8,7 @@ from app.models.domain_assignment import DomainAssignment
 from app.models.email_address import EmailAddress
 from app.models.forwarding_rule import ForwardingRule
 from app.models.inbound_email import InboundEmail
+from app.models.outbound_email import OutboundEmail
 from app.models.user import User
 
 __all__ = [
@@ -19,5 +20,6 @@ __all__ = [
     "EmailAddress",
     "ForwardingRule",
     "InboundEmail",
+    "OutboundEmail",
     "User",
 ]

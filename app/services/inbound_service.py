@@ -69,6 +69,20 @@ def _extract_domain_part(to_address: str) -> str:
     return to_address.rsplit("@", 1)[1].strip().lower()
 
 
+def _metadata_text(
+    value: str | None, max_length: int, *, lowercase: bool = False
+) -> str | None:
+    """清理非关键邮件元数据，避免异常 header 导致整封邮件拒收。"""
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    if lowercase:
+        cleaned = cleaned.lower()
+    return cleaned[:max_length]
+
+
 async def _resolve_secret(
     session: AsyncSession, to_address: str, zone_id: str | None = None
 ) -> str:
@@ -158,6 +172,10 @@ async def process_webhook(
     email = InboundEmail(
         to_address=str(payload.to_address).lower(),
         from_address=str(payload.from_address).lower(),
+        from_name=_metadata_text(payload.from_name, 255),
+        envelope_from=_metadata_text(payload.envelope_from, 320, lowercase=True),
+        reply_to=_metadata_text(payload.reply_to, 320, lowercase=True),
+        message_id=_metadata_text(payload.message_id, 255),
         subject=payload.subject,
         body_text=payload.body_text,
         body_html=payload.body_html,
@@ -228,3 +246,36 @@ async def get_latest_inbound_by_address(
         .limit(1)
     )
     return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def get_inbound_email_by_address_or_404(
+    session: AsyncSession, full_address: str, email_id: int
+) -> InboundEmail:
+    """按公开邮箱地址查询单封收件邮件，确保 token 只能访问本邮箱邮件。"""
+    stmt = select(InboundEmail).where(
+        InboundEmail.id == email_id,
+        func.lower(InboundEmail.to_address) == full_address.lower(),
+    )
+    email = (await session.execute(stmt)).scalar_one_or_none()
+    if email is None:
+        raise NotFoundError("邮件不存在")
+    return email
+
+
+async def list_inbound_emails_by_address(
+    session: AsyncSession,
+    full_address: str,
+    page: int,
+    size: int,
+) -> tuple[list[InboundEmail], int]:
+    """按单个收件地址分页查询收件邮件，用于公开邮箱查询页。"""
+    base = select(InboundEmail).where(
+        func.lower(InboundEmail.to_address) == full_address.lower()
+    )
+    total = (
+        await session.execute(select(func.count()).select_from(base.subquery()))
+    ).scalar_one()
+    result = await session.execute(
+        base.order_by(InboundEmail.id.desc()).offset((page - 1) * size).limit(size)
+    )
+    return list(result.scalars().all()), total

@@ -4,9 +4,8 @@ from fastapi import APIRouter, Query, Request, Response
 
 from app.dependencies import SessionDep
 from app.exceptions import NotFoundError
-from app.schemas.email_address import EmailAddressRead
 from app.schemas.inbound_email import InboundEmailRead
-from app.services import email_service, inbound_service
+from app.services import inbound_service
 from app.web.deps import CurrentWebUser
 from app.web.templating import render, render_error
 
@@ -26,18 +25,16 @@ async def list_inbound(
     emails, total = await inbound_service.list_inbound_emails(
         session, user, page, size, to_address
     )
-    addresses, _ = await email_service.list_email_addresses(session, user, 1, 200)
     return render(
         request,
         "inbound/list.html",
         user=user,
         active="inbound",
         emails=[InboundEmailRead.model_validate(e) for e in emails],
-        options=[EmailAddressRead.model_validate(a) for a in addresses],
         page=page,
         size=size,
         total=total,
-        to_address=to_address,
+        to_address=to_address or "",
     )
 
 

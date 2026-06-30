@@ -13,7 +13,7 @@
 - **Self-hosted email platform**：完全自部署，数据和 Cloudflare API Token 掌握在自己手里。
 - **Cloudflare Email Routing 管理**：同步域名、创建邮箱地址、管理转发规则和目标地址。
 - **Inbound webhook 收件**：通过 Cloudflare Email Worker 将收到的邮件推送到本平台并存储。
-- **Cloudflare Email Sending 发件**：从已授权域名发送邮件，适合轻量通知、工具邮件和测试邮件。
+- **Cloudflare Email Sending 发件**：从已授权域名发送邮件，保留发件箱记录，适合轻量通知、工具邮件和测试邮件。
 - **Web UI + API**：既可以在浏览器中管理，也可以通过 API Key 程序化收发邮件。
 - **安全默认值**：CF API Token 加密存储，API Key 只保存哈希，生产环境强制校验关键安全配置。
 
@@ -25,7 +25,7 @@
 - 管理邮箱地址、转发目标地址和转发规则
 - 一键部署收件 Worker，并为域名配置 catch-all 到 Worker
 - Webhook 接收邮件，支持 HTML 正文沙箱隔离查看
-- 通过 Cloudflare Email Sending API 发送邮件
+- 通过 Cloudflare Email Sending API 发送邮件，并在发件箱中查看发送结果
 - 创建和管理 API Key，原始 Key 仅创建时展示一次
 - 管理员后台：用户列表、用户详情和资源查看
 - SEO 入口：`robots.txt`、`sitemap.xml`、公开邮件页面
@@ -177,6 +177,7 @@ AUTO_MIGRATE_SQLITE=false
 | `LOGIN_RATE_LIMIT_ATTEMPTS` / `LOGIN_RATE_LIMIT_WINDOW_SECONDS` | 登录失败限流阈值与窗口 |
 | `API_KEY_RATE_LIMIT_ATTEMPTS` / `API_KEY_RATE_LIMIT_WINDOW_SECONDS` | API Key 调用限流阈值与窗口 |
 | `PUBLIC_MAIL_RATE_LIMIT_ATTEMPTS` / `PUBLIC_MAIL_RATE_LIMIT_WINDOW_SECONDS` | 公开邮件链接访问限流阈值与窗口 |
+| `PUBLIC_MAIL_SEND_RATE_LIMIT_ATTEMPTS` / `PUBLIC_MAIL_SEND_RATE_LIMIT_WINDOW_SECONDS` | 公开邮件链接发件限流阈值与窗口 |
 | `WEBHOOK_MAX_BYTES` | Webhook 请求体最大字节数，默认 1 MiB |
 
 ## Web UI 与 API
@@ -187,7 +188,7 @@ AUTO_MIGRATE_SQLITE=false
 - 仪表盘资源统计与最近收件查看
 - CF 账号绑定、同步域名和 Worker 部署
 - 邮箱地址、目标地址、转发规则管理
-- 收件箱查看、公开邮件链接、撰写并发送邮件
+- 收件箱查看、发件箱查看、公开邮件链接、撰写并发送邮件
 - API Key 管理和个人资料更新
 - 管理员用户管理
 
@@ -274,7 +275,7 @@ npx wrangler deploy
 X-Webhook-Signature
 ```
 
-签名校验失败时平台返回 `401`。收到的邮件按 `to` 地址归属到对应用户，可通过 API、Web UI 或公开链接查看。
+签名校验失败时平台返回 `401`。收到的邮件按 `to` 地址归属到对应用户，可通过 API、Web UI 或公开链接查看。新 Worker 会把 MIME Header `From` 作为展示发件人，同时把 Cloudflare `message.from`（SMTP envelope sender）保存为信封发件人，便于排查退信和转发链路。
 
 ## 测试
 

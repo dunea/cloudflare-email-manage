@@ -16,8 +16,11 @@
 
 <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
   <dl class="mb-5 grid gap-2 border-b border-slate-100 pb-5 text-sm sm:grid-cols-2">
-    <div><dt class="inline text-slate-500">发件人：</dt><dd class="inline font-mono text-slate-700">{{ email.from_address }}</dd></div>
+    <div><dt class="inline text-slate-500">发件人：</dt><dd class="inline font-mono text-slate-700">{% if email.from_name %}{{ email.from_name }} &lt;{{ email.from_address }}&gt;{% else %}{{ email.from_address }}{% endif %}</dd></div>
     <div><dt class="inline text-slate-500">收件地址：</dt><dd class="inline font-mono text-slate-700">{{ email.to_address }}</dd></div>
+    {% if email.envelope_from %}<div><dt class="inline text-slate-500">信封发件人：</dt><dd class="inline font-mono text-slate-700">{{ email.envelope_from }}</dd></div>{% endif %}
+    {% if email.reply_to %}<div><dt class="inline text-slate-500">回复地址：</dt><dd class="inline font-mono text-slate-700">{{ email.reply_to }}</dd></div>{% endif %}
+    {% if email.message_id %}<div><dt class="inline text-slate-500">Message-ID：</dt><dd class="inline font-mono text-xs text-slate-700">{{ email.message_id }}</dd></div>{% endif %}
     <div><dt class="inline text-slate-500">接收时间：</dt><dd class="inline text-slate-700">{{ email.received_at | dt }}</dd></div>
   </dl>
 

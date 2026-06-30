@@ -13,7 +13,7 @@
  *   2. 从 message.to 提取域名，查 WEBHOOK_SECRETS 找到该域名的 {zone_id, secret}
  *   3. 缓冲 message.raw（单次流，必须先 buffer）
  *   4. 用 postal-mime 解析 MIME，提取 subject / text / html
- *   5. 构造 JSON 载荷 {to, from, zone_id, subject, text, html}
+ *   5. 构造 JSON 载荷 {to, from, envelope_from, from_name, reply_to, message_id, zone_id, subject, text, html}
  *   6. 用该域名密钥计算 HMAC-SHA256，转十六进制
  *   7. fetch POST 到 WEBHOOK_URL，带 X-Webhook-Signature 头
  *
@@ -102,6 +102,54 @@ function parseSecrets(raw) {
   return {};
 }
 
+/**
+ * 清理并截断可选文本字段。
+ * @param {unknown} value
+ * @param {number} maxLength
+ * @returns {string}
+ */
+function metadataText(value, maxLength) {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, maxLength);
+}
+
+/**
+ * 从 postal-mime 地址对象中取邮箱地址。
+ * @param {unknown} value
+ * @returns {string}
+ */
+function normalizeAddress(value) {
+  let address = "";
+  if (value && typeof value === "object" && typeof value.address === "string") {
+    address = value.address;
+  } else if (typeof value === "string") {
+    address = value;
+  }
+  return metadataText(address, 320);
+}
+
+/**
+ * 从 postal-mime 地址对象中取展示名称。
+ * @param {unknown} value
+ * @returns {string}
+ */
+function addressName(value) {
+  if (value && typeof value === "object" && typeof value.name === "string") {
+    return metadataText(value.name, 255);
+  }
+  return "";
+}
+
+/**
+ * 取 postal-mime 地址列表中的第一个邮箱地址。
+ * @param {unknown} value
+ * @returns {string}
+ */
+function firstAddress(value) {
+  if (!Array.isArray(value) || value.length === 0) return "";
+  return normalizeAddress(value[0]);
+}
+
 export default {
   /**
    * Email Routing 触发的邮件处理器。
@@ -149,9 +197,17 @@ export default {
     // 构造平台 Webhook 载荷（字段名与 InboundEmailPayload 一致）
     // zone_id 来自该域名的配置项，与签名 secret 同源，确保平台侧
     // 能按 (zone_id, domain_name) 唯一定位 Domain.webhook_secret。
+    const headerFrom = normalizeAddress(parsed.from) || message.from;
     const payload = {
       to: message.to,
-      from: message.from,
+      from: headerFrom,
+      from_name: addressName(parsed.from),
+      envelope_from: metadataText(message.from, 320),
+      reply_to: firstAddress(parsed.replyTo),
+      message_id: metadataText(
+        parsed.messageId || message.headers.get("message-id") || "",
+        255,
+      ),
       zone_id: entry.zone_id,
       subject: parsed.subject || "",
       text: parsed.text || "",

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% from "components/macros.html" import badge, empty_state, pagination %}
+{% block title %}发件箱 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="mb-6 flex flex-wrap items-start justify-between gap-3">
+  <div>
+    <h1 class="text-2xl font-semibold text-slate-900">发件箱</h1>
+    <p class="mt-1 text-sm text-slate-500">通过 Cloudflare Email Sending 发出的邮件记录</p>
+  </div>
+  <a href="/outbound/compose" class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">撰写邮件</a>
+</div>
+
+<form method="get" action="/outbound" class="mb-4 flex flex-wrap items-end gap-2 text-sm">
+  <div>
+    <label class="mb-1 block text-slate-500">按发件地址过滤</label>
+    <input name="from_address" value="{{ from_address }}" placeholder="hello@example.com"
+           class="w-72 max-w-full rounded-lg border border-slate-300 px-3 py-1.5 font-mono text-sm focus:border-brand focus:outline-none" />
+  </div>
+  <button type="submit" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50">筛选</button>
+  {% if from_address %}
+  <a href="/outbound" class="rounded-lg px-3 py-1.5 font-medium text-slate-500 hover:bg-slate-100">清除</a>
+  {% endif %}
+</form>
+
+{% if emails %}
+<div class="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm md:block">
+  <table class="w-full text-sm">
+    <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
+      <tr>
+        <th class="px-4 py-3">发件人</th>
+        <th class="px-4 py-3">收件人</th>
+        <th class="px-4 py-3">主题</th>
+        <th class="px-4 py-3">状态</th>
+        <th class="px-4 py-3">时间</th>
+        <th class="px-4 py-3 text-right">操作</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100">
+      {% for m in emails %}
+      <tr class="hover:bg-slate-50">
+        <td class="px-4 py-3 font-mono text-slate-700">{{ m.from_address }}</td>
+        <td class="px-4 py-3 text-slate-600">
+          <span class="line-clamp-1">{{ m.to_addresses | join(", ") }}</span>
+        </td>
+        <td class="px-4 py-3 font-medium text-slate-700">{{ m.subject or "(无主题)" }}</td>
+        <td class="px-4 py-3">
+          {% if m.status == "sent" %}{{ badge("已发送", "green") }}{% elif m.status == "failed" %}{{ badge("失败", "red") }}{% else %}{{ badge("发送中", "amber") }}{% endif %}
+        </td>
+        <td class="px-4 py-3 text-slate-400">{{ (m.sent_at or m.created_at) | dt }}</td>
+        <td class="px-4 py-3 text-right">
+          <a href="/outbound/{{ m.id }}" class="text-sm font-medium text-brand hover:underline">查看</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="space-y-3 md:hidden">
+  {% for m in emails %}
+  <a href="/outbound/{{ m.id }}"
+     class="block rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+    <div class="flex items-start justify-between gap-3">
+      <p class="font-medium text-slate-900">{{ m.subject or "(无主题)" }}</p>
+      <span class="shrink-0">
+        {% if m.status == "sent" %}{{ badge("已发送", "green") }}{% elif m.status == "failed" %}{{ badge("失败", "red") }}{% else %}{{ badge("发送中", "amber") }}{% endif %}
+      </span>
+    </div>
+    <dl class="mt-3 space-y-2 text-sm">
+      <div>
+        <dt class="text-xs font-medium text-slate-500">发件人</dt>
+        <dd class="mt-0.5 break-all font-mono text-slate-700">{{ m.from_address }}</dd>
+      </div>
+      <div>
+        <dt class="text-xs font-medium text-slate-500">收件人</dt>
+        <dd class="mt-0.5 break-all text-slate-700">{{ m.to_addresses | join(", ") }}</dd>
+      </div>
+      <div>
+        <dt class="text-xs font-medium text-slate-500">时间</dt>
+        <dd class="mt-0.5 text-slate-500">{{ (m.sent_at or m.created_at) | dt }}</dd>
+      </div>
+    </dl>
+  </a>
+  {% endfor %}
+</div>
+{{ pagination(page, size, total, "/outbound") }}
+{% else %}
+{{ empty_state("发件箱为空。发送邮件后，记录会显示在这里。") }}
+{% endif %}
+{% endblock %}

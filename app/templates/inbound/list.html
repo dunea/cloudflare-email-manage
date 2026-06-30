@@ -7,18 +7,17 @@
   <p class="mt-1 text-sm text-slate-500">通过 Webhook 接收并存储的邮件</p>
 </div>
 
-{% if options %}
-<form method="get" action="/inbound" class="mb-4 flex items-center gap-2 text-sm">
-  <label class="text-slate-500">按收件地址过滤：</label>
-  <select name="to_address" onchange="this.form.submit()"
-          class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-brand focus:outline-none">
-    <option value="">全部地址</option>
-    {% for o in options %}
-    <option value="{{ o.full_address }}" {% if to_address == o.full_address %}selected{% endif %}>{{ o.full_address }}</option>
-    {% endfor %}
-  </select>
+<form method="get" action="/inbound" class="mb-4 flex flex-wrap items-end gap-2 text-sm">
+  <div>
+    <label class="mb-1 block text-slate-500">按收件地址过滤</label>
+    <input name="to_address" value="{{ to_address }}" placeholder="hello@example.com"
+           class="w-72 max-w-full rounded-lg border border-slate-300 px-3 py-1.5 font-mono text-sm focus:border-brand focus:outline-none" />
+  </div>
+  <button type="submit" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50">筛选</button>
+  {% if to_address %}
+  <a href="/inbound" class="rounded-lg px-3 py-1.5 font-medium text-slate-500 hover:bg-slate-100">清除</a>
+  {% endif %}
 </form>
-{% endif %}
 
 {% if emails %}
 <div class="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm md:block">
@@ -29,15 +28,19 @@
         <th class="px-4 py-3">主题</th>
         <th class="px-4 py-3">发件人</th>
         <th class="px-4 py-3">时间</th>
+        <th class="px-4 py-3 text-right">操作</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-slate-100">
       {% for m in emails %}
-      <tr class="cursor-pointer hover:bg-slate-50" onclick="window.location='/inbound/{{ m.id }}'">
+      <tr class="hover:bg-slate-50">
         <td class="px-4 py-3 font-mono text-slate-700">{{ m.to_address }}</td>
         <td class="px-4 py-3 font-medium text-slate-700">{{ m.subject or "(无主题)" }}</td>
         <td class="px-4 py-3 text-slate-500">{{ m.from_address }}</td>
         <td class="px-4 py-3 text-slate-400">{{ m.received_at | dt }}</td>
+        <td class="px-4 py-3 text-right">
+          <a href="/inbound/{{ m.id }}" class="text-sm font-medium text-brand hover:underline">查看</a>
+        </td>
       </tr>
       {% endfor %}
     </tbody>

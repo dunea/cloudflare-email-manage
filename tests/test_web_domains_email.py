@@ -89,6 +89,35 @@ async def test_domain_detail(client: AsyncClient, db_session: AsyncSession) -> N
     assert "mine.com" in resp.text
 
 
+async def test_domain_detail_shows_email_preview_for_large_domain(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """域名详情只展示邮箱预览，完整列表交给分页邮箱地址页。"""
+    await _web_login(client)
+    user = await _get_user(db_session)
+    domain = await _seed_domain(db_session, user.id, domain_name="bulk.com")
+    for i in range(30):
+        db_session.add(
+            EmailAddress(
+                domain_id=domain.id,
+                user_id=user.id,
+                local_part=f"user{i}",
+                full_address=f"user{i}@bulk.com",
+                public_token=f"{i:032x}",
+            )
+        )
+    await db_session.commit()
+
+    resp = await client.get(f"/domains/{domain.id}")
+
+    assert resp.status_code == 200
+    assert "共 30 个" in resp.text
+    assert "当前仅展示前 20 个预览" in resp.text
+    assert "完整列表、筛选和批量链接操作" in resp.text
+    assert "user0@bulk.com" in resp.text
+    assert "user29@bulk.com" not in resp.text
+
+
 async def test_domain_detail_not_found(client: AsyncClient) -> None:
     await _web_login(client)
     resp = await client.get("/domains/99999")

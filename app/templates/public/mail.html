@@ -13,52 +13,157 @@
   <style>[x-cloak]{display:none !important;}</style>
 </head>
 <body class="min-h-screen bg-slate-50 text-slate-800 antialiased">
-  <div class="mx-auto w-full max-w-3xl px-4 py-10">
-    <header class="mb-6 flex items-center gap-2">
-      <span class="text-2xl">📨</span>
-      <div>
-        <h1 class="text-lg font-semibold text-slate-900">{{ app_name }}</h1>
-        <p class="text-xs text-slate-500">公开邮件查询 · {{ address }}</p>
+  <div class="mx-auto w-full max-w-5xl px-4 py-8">
+    <header class="mb-6 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-2">
+        <span class="text-2xl">📨</span>
+        <div>
+          <h1 class="text-lg font-semibold text-slate-900">{{ app_name }}</h1>
+          <p class="break-all text-xs text-slate-500">公开邮件查询 · {{ address }}</p>
+        </div>
       </div>
+      <a href="/mail/{{ token }}.txt" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">纯文本接口</a>
     </header>
 
-    {% if email %}
-    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-      <h2 class="mb-4 text-xl font-semibold text-slate-900">{{ email.subject or "(无主题)" }}</h2>
-      <dl class="mb-5 grid gap-2 border-b border-slate-100 pb-5 text-sm sm:grid-cols-2">
-        <div><dt class="inline text-slate-500">发件人：</dt><dd class="inline font-mono text-slate-700">{{ email.from_address }}</dd></div>
-        <div><dt class="inline text-slate-500">收件地址：</dt><dd class="inline font-mono text-slate-700">{{ email.to_address }}</dd></div>
-        <div><dt class="inline text-slate-500">接收时间：</dt><dd class="inline text-slate-700">{{ email.received_at | dt }}</dd></div>
-      </dl>
-
-      {% if email.body_text %}
-      <div class="mb-6">
-        <h3 class="mb-2 text-sm font-semibold text-slate-500">纯文本正文</h3>
-        <pre class="overflow-x-auto whitespace-pre-wrap rounded-lg bg-slate-50 p-4 text-sm text-slate-800">{{ email.body_text }}</pre>
+    {% if flashes %}
+    <div class="mb-4 space-y-2">
+      {% for f in flashes %}
+      <div class="rounded-lg border px-4 py-3 text-sm {% if f.category == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-700{% elif f.category == 'error' %}border-red-200 bg-red-50 text-red-700{% else %}border-slate-200 bg-white text-slate-700{% endif %}">
+        {{ f.message }}
       </div>
-      {% endif %}
-
-      {% if email.body_html %}
-      <div>
-        <h3 class="mb-2 text-sm font-semibold text-slate-500">HTML 预览（沙箱隔离，禁用脚本）</h3>
-        <iframe sandbox class="h-96 w-full rounded-lg border border-slate-200" srcdoc="{{ email.body_html }}"></iframe>
-      </div>
-      {% endif %}
-
-      {% if not email.body_text and not email.body_html %}
-      <p class="text-sm text-slate-400">（无正文内容）</p>
-      {% endif %}
-    </div>
-    {% else %}
-    <div class="rounded-xl border border-slate-200 bg-white p-12 text-center shadow-sm">
-      <div class="mb-3 text-4xl">📭</div>
-      <p class="text-sm text-slate-500">该邮箱暂无邮件</p>
+      {% endfor %}
     </div>
     {% endif %}
 
-    <p class="mt-6 text-center text-xs text-slate-400">
-      纯文本接口：<a href="/mail/{{ request.path_params.token }}.txt" class="font-medium text-brand hover:underline">/mail/{{ request.path_params.token }}.txt</a>
-    </p>
+    <nav class="mb-4 flex flex-wrap gap-2 text-sm">
+      <a href="/mail/{{ token }}?tab=inbound"
+         class="rounded-lg px-4 py-2 font-medium {{ 'bg-brand text-white' if tab == 'inbound' else 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50' }}">收件箱（{{ inbound_total }}）</a>
+      <a href="/mail/{{ token }}?tab=outbound"
+         class="rounded-lg px-4 py-2 font-medium {{ 'bg-brand text-white' if tab == 'outbound' else 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50' }}">发件箱（{{ outbound_total }}）</a>
+      <a href="/mail/{{ token }}?tab=compose"
+         class="rounded-lg px-4 py-2 font-medium {{ 'bg-brand text-white' if tab == 'compose' else 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50' }}">发件</a>
+    </nav>
+
+    {% if tab == "inbound" %}
+      {% if inbound_emails %}
+      <div class="space-y-4">
+        {% for item in inbound_emails %}
+        {% set email = item.email %}
+        <article class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <h2 class="text-lg font-semibold text-slate-900">{{ email.subject or "(无主题)" }}</h2>
+            <span class="text-sm text-slate-400">{{ email.received_at | dt }}</span>
+          </div>
+          <dl class="mb-4 grid gap-2 border-b border-slate-100 pb-4 text-sm sm:grid-cols-2">
+            <div><dt class="inline text-slate-500">发件人：</dt><dd class="inline font-mono text-slate-700">{% if email.from_name %}{{ email.from_name }} &lt;{{ email.from_address }}&gt;{% else %}{{ email.from_address }}{% endif %}</dd></div>
+            <div><dt class="inline text-slate-500">收件地址：</dt><dd class="inline font-mono text-slate-700">{{ email.to_address }}</dd></div>
+            {% if email.envelope_from %}<div><dt class="inline text-slate-500">信封发件人：</dt><dd class="inline font-mono text-slate-700">{{ email.envelope_from }}</dd></div>{% endif %}
+            {% if email.reply_to %}<div><dt class="inline text-slate-500">回复地址：</dt><dd class="inline font-mono text-slate-700">{{ email.reply_to }}</dd></div>{% endif %}
+          </dl>
+          {% if item.preview %}
+          <p class="mb-4 rounded-lg bg-slate-50 p-4 text-sm leading-6 text-slate-700">{{ item.preview }}</p>
+          {% else %}
+          <p class="mb-4 text-sm text-slate-400">（无正文预览）</p>
+          {% endif %}
+          <a href="/mail/{{ token }}/inbound/{{ email.id }}" class="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50">查看</a>
+        </article>
+        {% endfor %}
+      </div>
+      {% set inbound_pages = (inbound_total + 19) // 20 if inbound_total else 0 %}
+      {% if inbound_pages > 1 %}
+      <nav class="mt-4 flex items-center justify-between text-sm">
+        <span class="text-slate-500">第 {{ inbound_page }}/{{ inbound_pages }} 页</span>
+        <div class="flex gap-2">
+          {% if inbound_page > 1 %}
+          <a href="/mail/{{ token }}?tab=inbound&inbound_page={{ inbound_page - 1 }}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 hover:bg-slate-50">上一页</a>
+          {% endif %}
+          {% if inbound_page < inbound_pages %}
+          <a href="/mail/{{ token }}?tab=inbound&inbound_page={{ inbound_page + 1 }}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 hover:bg-slate-50">下一页</a>
+          {% endif %}
+        </div>
+      </nav>
+      {% endif %}
+      {% else %}
+      <div class="rounded-xl border border-slate-200 bg-white p-12 text-center shadow-sm">
+        <div class="mb-3 text-4xl">📭</div>
+        <p class="text-sm text-slate-500">该邮箱暂无邮件</p>
+      </div>
+      {% endif %}
+    {% elif tab == "outbound" %}
+      {% if outbound_emails %}
+      <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+        <table class="w-full text-sm">
+          <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
+            <tr>
+              <th class="px-4 py-3">收件人</th>
+              <th class="px-4 py-3">主题</th>
+              <th class="px-4 py-3">状态</th>
+              <th class="px-4 py-3">时间</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {% for email in outbound_emails %}
+            <tr>
+              <td class="px-4 py-3 text-slate-600">{{ email.to_addresses | join(", ") }}</td>
+              <td class="px-4 py-3 font-medium text-slate-700">{{ email.subject }}</td>
+              <td class="px-4 py-3">
+                <span class="rounded-full px-2.5 py-0.5 text-xs font-medium {% if email.status == 'sent' %}bg-emerald-100 text-emerald-700{% elif email.status == 'failed' %}bg-red-100 text-red-700{% else %}bg-amber-100 text-amber-700{% endif %}">
+                  {% if email.status == "sent" %}已发送{% elif email.status == "failed" %}失败{% else %}发送中{% endif %}
+                </span>
+              </td>
+              <td class="px-4 py-3 text-slate-400">{{ (email.sent_at or email.created_at) | dt }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% set outbound_pages = (outbound_total + 19) // 20 if outbound_total else 0 %}
+      {% if outbound_pages > 1 %}
+      <nav class="mt-4 flex items-center justify-between text-sm">
+        <span class="text-slate-500">第 {{ outbound_page }}/{{ outbound_pages }} 页</span>
+        <div class="flex gap-2">
+          {% if outbound_page > 1 %}
+          <a href="/mail/{{ token }}?tab=outbound&outbound_page={{ outbound_page - 1 }}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 hover:bg-slate-50">上一页</a>
+          {% endif %}
+          {% if outbound_page < outbound_pages %}
+          <a href="/mail/{{ token }}?tab=outbound&outbound_page={{ outbound_page + 1 }}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 hover:bg-slate-50">下一页</a>
+          {% endif %}
+        </div>
+      </nav>
+      {% endif %}
+      {% else %}
+      <div class="rounded-xl border border-slate-200 bg-white p-12 text-center shadow-sm">
+        <div class="mb-3 text-4xl">📤</div>
+        <p class="text-sm text-slate-500">该邮箱暂无发件记录</p>
+      </div>
+      {% endif %}
+    {% else %}
+      <form method="post" action="/mail/{{ token }}/send" class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <div class="mb-4">
+          <label class="mb-1 block text-sm font-medium text-slate-700">发件人</label>
+          <input value="{{ address }}" disabled class="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-sm text-slate-500" />
+        </div>
+        <div class="mb-4">
+          <label class="mb-1 block text-sm font-medium text-slate-700">收件人</label>
+          <textarea name="to" rows="2" required placeholder="多个收件人用逗号、分号或换行分隔" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30"></textarea>
+        </div>
+        <div class="mb-4">
+          <label class="mb-1 block text-sm font-medium text-slate-700">主题</label>
+          <input name="subject" required maxlength="998" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+        </div>
+        <div class="mb-4">
+          <label class="mb-1 block text-sm font-medium text-slate-700">纯文本正文</label>
+          <textarea name="text" rows="7" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30"></textarea>
+        </div>
+        <div class="mb-5">
+          <label class="mb-1 block text-sm font-medium text-slate-700">HTML 正文（可选）</label>
+          <textarea name="html" rows="4" class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30"></textarea>
+          <p class="mt-1 text-xs text-slate-400">纯文本与 HTML 至少填写一个。公开链接只允许从当前邮箱地址发件。</p>
+        </div>
+        <button type="submit" class="rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark">发送邮件</button>
+      </form>
+    {% endif %}
   </div>
 </body>
 </html>

@@ -22,7 +22,10 @@
   <!-- 邮箱地址 -->
   <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
     <div class="mb-4 flex items-center justify-between">
-      <h3 class="font-semibold text-slate-800">该域名下的邮箱地址</h3>
+      <div>
+        <h3 class="font-semibold text-slate-800">该域名下的邮箱地址</h3>
+        <p class="mt-1 text-xs text-slate-500">共 {{ address_total }} 个，当前仅展示前 {{ addresses | length }} 个预览</p>
+      </div>
       <a href="/email-addresses?domain_id={{ domain.id }}" class="text-sm font-medium text-brand hover:underline">管理邮箱 →</a>
     </div>
     {% if addresses %}
@@ -36,6 +39,11 @@
     </ul>
     {% else %}
     <p class="text-sm text-slate-400">该域名下还没有邮箱地址。</p>
+    {% endif %}
+    {% if address_total > (addresses | length) %}
+    <div class="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+      该域名邮箱数量较多，完整列表、筛选和批量链接操作请进入「管理邮箱」页面。
+    </div>
     {% endif %}
   </div>
 </div>

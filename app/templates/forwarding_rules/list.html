@@ -7,71 +7,42 @@
   <p class="mt-1 text-sm text-slate-500">将发往某邮箱地址的邮件转发到外部目标邮箱（同步至 Cloudflare Email Routing）</p>
 </div>
 
-{% if options %}
+{% if source_total and dest_options and available_source_total %}
 <form method="post" action="/forwarding-rules"
-      x-data="{
-        emailAccount: {{ email_account | tojson }},
-        destsByAccount: {{ dests_by_account | tojson }},
-        selectedEmail: {{ (options[0].id|string) | tojson if options else 'null' }},
-        get currentAccount() { return this.emailAccount[String(this.selectedEmail)] || "" },
-        get availableDests() {
-          const list = this.destsByAccount[this.currentAccount] || [];
-          return list.map(function(d) { return { email: d.email }; });
-        },
-        renderDests() {
-          const select = this.$refs.destinationSelect;
-          const currentValue = select.value;
-          select.replaceChildren();
-          this.availableDests.forEach(function(d) {
-            const option = document.createElement('option');
-            option.value = d.email;
-            option.textContent = d.email;
-            select.appendChild(option);
-          });
-          if (this.availableDests.some(function(d) { return d.email === currentValue; })) {
-            select.value = currentValue;
-          }
-        }
-      }"
-      x-init="renderDests()"
-      class="mb-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      class="mb-6 grid gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-[minmax(220px,1fr)_auto_minmax(220px,1fr)_auto] md:items-start">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-  <div class="min-w-[200px] flex-1">
+  <div>
     <label class="mb-1 block text-sm font-medium text-slate-700">源邮箱地址</label>
-    <select name="email_address_id" required x-model="selectedEmail" @change="renderDests()"
-            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
-      <option value="" disabled selected>请选择</option>
+    <input name="source_email" required list="source-email-suggestions" placeholder="hello@example.com"
+           class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+    <datalist id="source-email-suggestions">
       {% for o in options %}
-      <option value="{{ o.id }}">{{ o.full_address }}</option>
+      <option value="{{ o.full_address }}"></option>
       {% endfor %}
-    </select>
+    </datalist>
+    <p class="mt-1 min-h-4 text-xs text-slate-400">可输入任意未绑定规则的启用邮箱；建议仅显示最近 25 个。</p>
   </div>
-  <div class="flex items-end pb-2 text-slate-400">→</div>
-  <div class="min-w-[200px] flex-1">
+  <div class="hidden pt-8 text-slate-400 md:block">→</div>
+  <div>
     <label class="mb-1 block text-sm font-medium text-slate-700">转发目标邮箱</label>
-    <select name="destination_email" required x-ref="destinationSelect"
-            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
-      {% set initial_account = email_account.get(options[0].id|string) if options else "" %}
-      {% for d in dests_by_account.get(initial_account, []) %}
-      <option value="{{ d.email }}">{{ d.email }}</option>
+    <input name="destination_email" required list="destination-email-suggestions" placeholder="dest@example.com"
+           class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30" />
+    <datalist id="destination-email-suggestions">
+      {% for d in dest_options %}
+      <option value="{{ d.email }}"></option>
       {% endfor %}
-    </select>
-    <template x-if="selectedEmail && !availableDests.length">
-      <p class="mt-1 text-xs text-amber-600">该账号下暂无已验证的目标地址，请先在「目标地址」中添加并验证。</p>
-    </template>
-    {% if not dest_options %}
-    <p class="mt-1 text-xs text-amber-600">还没有已验证的目标地址，请先在「目标地址」中添加并验证。</p>
-    {% endif %}
+    </datalist>
+    <p class="mt-1 min-h-4 text-xs text-slate-400">目标必须是同一 CF 账号下已验证地址；建议仅显示前 50 个。</p>
   </div>
-  <button type="submit" class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">创建</button>
+  <button type="submit" class="mt-6 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark md:mt-7">创建</button>
 </form>
-{% elif not dest_options %}
+{% elif not source_total or not dest_options %}
 <div class="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
   创建转发规则前，请先在「邮箱地址」创建源邮箱，并在「目标地址」添加并验证转发目标邮箱。
 </div>
 {% else %}
 <div class="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-  所有源邮箱均已绑定转发规则。如需更换目标，请先删除对应规则释放源邮箱。
+  所有源邮箱均已绑定转发规则，请先删除对应规则释放源邮箱。
 </div>
 {% endif %}
 

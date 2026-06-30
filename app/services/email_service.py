@@ -93,6 +93,22 @@ async def get_email_address_or_404(
     return email_address
 
 
+async def get_email_address_by_full_address_or_404(
+    session: AsyncSession, full_address: str, user: User
+) -> EmailAddress:
+    """按完整邮箱地址查询邮箱地址；非管理员仅能访问自己的地址。"""
+    stmt = select(EmailAddress).where(
+        func.lower(EmailAddress.full_address) == full_address.lower(),
+        EmailAddress.is_deleted.is_(False),
+    )
+    if user.role != "admin":
+        stmt = stmt.where(EmailAddress.user_id == user.id)
+    email_address = (await session.execute(stmt)).scalar_one_or_none()
+    if email_address is None:
+        raise NotFoundError("邮箱地址不存在")
+    return email_address
+
+
 async def list_email_addresses(
     session: AsyncSession,
     user: User,

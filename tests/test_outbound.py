@@ -9,8 +9,12 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.exceptions import CloudflareError
+from app.models import OutboundEmail
 from app.services.cloudflare import CloudflareClient
 
 # 模拟 CF 返回的 Zone 列表
@@ -188,9 +192,9 @@ async def _setup_email_address_with_account(
 
 
 async def test_send_email(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """从已管理地址发件，调用 CF send_email 并传递正确载荷。"""
+    """从已管理地址发件，调用 CF send_email、返回发件记录 ID 并写入发件箱。"""
     calls = _patch_cf(monkeypatch)
     token = await _register_and_login(client)
     await _setup_email_address(client, token)
@@ -209,6 +213,8 @@ async def test_send_email(
     data = resp.json()["data"]
     assert data["from_address"] == "hello@example.com"
     assert data["to"] == ["dest@other.com"]
+    assert data["status"] == "sent"
+    assert isinstance(data["outbound_email_id"], int)
 
     assert len(calls.sent) == 1
     account_id, payload = calls.sent[0]
@@ -218,6 +224,100 @@ async def test_send_email(
     assert payload["subject"] == "Hi"
     assert payload["text"] == "Hello world"
     assert "html" not in payload
+
+    record = (await db_session.execute(select(OutboundEmail))).scalar_one()
+    assert record.id == data["outbound_email_id"]
+    assert record.from_address == "hello@example.com"
+    assert record.to_addresses == ["dest@other.com"]
+    assert record.status == "sent"
+    assert record.provider_response == {"id": "msg-1"}
+
+
+async def test_send_failure_records_failed_outbound(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cloudflare 发件失败时，保留 failed 发件记录便于排查。"""
+    _patch_cf(monkeypatch)
+
+    async def _fail_send(
+        self: CloudflareClient, account_id: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        raise CloudflareError("Cloudflare 发件失败")
+
+    monkeypatch.setattr(CloudflareClient, "send_email", _fail_send)
+    token = await _register_and_login(client)
+    await _setup_email_address(client, token)
+
+    resp = await client.post(
+        "/api/v1/outbound/send",
+        headers=_auth(token),
+        json={
+            "from_address": "hello@example.com",
+            "to": ["dest@other.com"],
+            "subject": "Hi",
+            "text": "Hello world",
+        },
+    )
+
+    assert resp.status_code == 502
+    record = (await db_session.execute(select(OutboundEmail))).scalar_one()
+    assert record.status == "failed"
+    assert record.error_message == "Cloudflare 发件失败"
+
+
+async def test_list_and_get_outbound_email(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """JWT 用户可读取自己的发件箱列表与详情。"""
+    _patch_cf(monkeypatch)
+    token = await _register_and_login(client)
+    await _setup_email_address(client, token)
+    sent = await client.post(
+        "/api/v1/outbound/send",
+        headers=_auth(token),
+        json={
+            "from_address": "hello@example.com",
+            "to": ["dest@other.com"],
+            "subject": "Hi",
+            "text": "Hello world",
+        },
+    )
+    email_id = sent.json()["data"]["outbound_email_id"]
+
+    listing = await client.get("/api/v1/outbound", headers=_auth(token))
+    assert listing.status_code == 200
+    assert listing.json()["data"]["total"] == 1
+    assert listing.json()["data"]["items"][0]["id"] == email_id
+
+    detail = await client.get(f"/api/v1/outbound/{email_id}", headers=_auth(token))
+    assert detail.status_code == 200
+    assert detail.json()["data"]["subject"] == "Hi"
+
+
+async def test_get_outbound_isolation(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """他人无法按 id 获取不属于自己的发件记录。"""
+    _patch_cf(monkeypatch)
+    token_a = await _register_and_login(client)
+    await _setup_email_address(client, token_a)
+    sent = await client.post(
+        "/api/v1/outbound/send",
+        headers=_auth(token_a),
+        json={
+            "from_address": "hello@example.com",
+            "to": ["dest@other.com"],
+            "subject": "Hi",
+            "text": "Hello world",
+        },
+    )
+    email_id = sent.json()["data"]["outbound_email_id"]
+
+    token_b = await _register_and_login(
+        client, username="bob", email="bob@example.com"
+    )
+    resp = await client.get(f"/api/v1/outbound/{email_id}", headers=_auth(token_b))
+    assert resp.status_code == 404
 
 
 async def test_send_requires_auth(client: AsyncClient) -> None:

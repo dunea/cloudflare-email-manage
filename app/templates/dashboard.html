@@ -31,17 +31,19 @@
           <th class="px-4 py-3">主题</th>
           <th class="px-4 py-3">发件人</th>
           <th class="px-4 py-3">时间</th>
+          <th class="px-4 py-3 text-right">操作</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
         {% for m in recent_inbound %}
         <tr class="hover:bg-slate-50">
-          <td class="px-4 py-3">
-            <a href="/inbound/{{ m.id }}" class="font-medium text-slate-700 hover:text-brand">{{ m.to_address }}</a>
-          </td>
+          <td class="px-4 py-3 font-mono text-slate-700">{{ m.to_address }}</td>
           <td class="px-4 py-3 text-slate-600">{{ m.subject or "(无主题)" }}</td>
           <td class="px-4 py-3 text-slate-500">{{ m.from_address }}</td>
           <td class="px-4 py-3 text-slate-400">{{ m.received_at | dt }}</td>
+          <td class="px-4 py-3 text-right">
+            <a href="/inbound/{{ m.id }}" class="text-sm font-medium text-brand hover:underline">查看</a>
+          </td>
         </tr>
         {% endfor %}
       </tbody>

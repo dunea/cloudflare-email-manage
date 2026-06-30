@@ -245,6 +245,88 @@ async def test_webhook_stores_email(
     assert len(rows) == 1
 
 
+async def test_webhook_stores_header_sender_metadata(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """新 Worker payload 会保存 Header From 与 envelope sender。"""
+    resp = await _post_webhook(
+        client,
+        {
+            "to": "hello@example.com",
+            "from": "real@example.net",
+            "from_name": "Real Sender",
+            "envelope_from": "bounce@example.net",
+            "reply_to": "reply@example.net",
+            "message_id": "<msg-1@example.net>",
+            "subject": "Sender meta",
+            "text": "Body",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["from_address"] == "real@example.net"
+    assert data["from_name"] == "Real Sender"
+    assert data["envelope_from"] == "bounce@example.net"
+    assert data["reply_to"] == "reply@example.net"
+    assert data["message_id"] == "<msg-1@example.net>"
+
+    row = (await db_session.execute(select(InboundEmail))).scalar_one()
+    assert row.from_address == "real@example.net"
+    assert row.envelope_from == "bounce@example.net"
+
+
+async def test_webhook_truncates_long_sender_metadata(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """非关键 Header 元数据过长时会截断入库，不应拒收整封邮件。"""
+    resp = await _post_webhook(
+        client,
+        {
+            "to": "hello@example.com",
+            "from": "real@example.net",
+            "from_name": "Sender " + "N" * 400,
+            "envelope_from": "BOUNCE-" + "A" * 400,
+            "reply_to": "REPLY-" + "B" * 400,
+            "message_id": "<" + "m" * 400 + "@example.net>",
+            "subject": "Long meta",
+            "text": "Body still saved",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["body_text"] == "Body still saved"
+    assert len(data["from_name"]) == 255
+    assert len(data["envelope_from"]) == 320
+    assert data["envelope_from"] == data["envelope_from"].lower()
+    assert len(data["reply_to"]) == 320
+    assert data["reply_to"] == data["reply_to"].lower()
+    assert len(data["message_id"]) == 255
+
+    row = (await db_session.execute(select(InboundEmail))).scalar_one()
+    assert row.body_text == "Body still saved"
+    assert len(row.from_name or "") == 255
+
+
+async def test_webhook_legacy_payload_sender_metadata_optional(
+    client: AsyncClient,
+) -> None:
+    """旧 Worker 只传 from/to/body 时仍可入库。"""
+    resp = await _post_webhook(
+        client,
+        {
+            "to": "hello@example.com",
+            "from": "sender@external.com",
+            "subject": "Legacy",
+            "text": "Body",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["from_address"] == "sender@external.com"
+    assert data["envelope_from"] is None
+
+
 async def test_webhook_missing_signature(client: AsyncClient) -> None:
     """缺少签名返回 401。"""
     resp = await _post_webhook(

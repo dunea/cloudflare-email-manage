@@ -16,6 +16,10 @@ class InboundEmailPayload(BaseModel):
 
     to_address: EmailStr = Field(alias="to", description="收件地址")
     from_address: EmailStr = Field(alias="from", description="发件地址")
+    from_name: str | None = None
+    envelope_from: str | None = None
+    reply_to: str | None = None
+    message_id: str | None = None
     subject: str | None = Field(default=None, max_length=998)
     body_text: str | None = Field(default=None, alias="text")
     body_html: str | None = Field(default=None, alias="html")
@@ -29,6 +33,10 @@ class InboundEmailRead(BaseModel):
     id: int
     to_address: str
     from_address: str
+    from_name: str | None = None
+    envelope_from: str | None = None
+    reply_to: str | None = None
+    message_id: str | None = None
     subject: str | None = None
     body_text: str | None = None
     body_html: str | None = None
