@@ -3,15 +3,17 @@
 所有 Cloudflare 调用通过 monkeypatch 替换 CloudflareClient 方法，不发真实请求。
 """
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.exceptions import CFPermissionPrecheckError, CloudflareError
-from app.models import CFAccount
+from app.models import CFAccount, Domain, EmailAddress, InboundEmail, User
 from app.services.cloudflare import CloudflareClient
-from app.services.crypto import decrypt_token
+from app.services.crypto import decrypt_token, encrypt_token
 from app.web.cf_accounts import _capability_report_from_exception
 from app.web.templating import _format_dt
 
@@ -161,12 +163,57 @@ async def test_cf_accounts_requires_auth(client: AsyncClient) -> None:
     assert resp.headers["location"].startswith("/login")
 
 
-async def test_dashboard_renders_stats(client: AsyncClient) -> None:
+async def test_dashboard_renders_stats(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
     """登录后仪表盘渲染统计与最近收件区块。"""
     await _web_login(client)
+    user = (
+        await db_session.execute(select(User).where(User.username == "alice"))
+    ).scalar_one()
+    cf = CFAccount(
+        user_id=user.id,
+        name="acc",
+        encrypted_api_token=encrypt_token("tok"),
+        account_id="acc-1",
+    )
+    db_session.add(cf)
+    await db_session.commit()
+    await db_session.refresh(cf)
+    domain = Domain(
+        cf_account_id=cf.id,
+        zone_id="zone-1",
+        domain_name="example.com",
+        status="active",
+    )
+    db_session.add(domain)
+    await db_session.commit()
+    await db_session.refresh(domain)
+    address = EmailAddress(
+        domain_id=domain.id,
+        user_id=user.id,
+        local_part="hello",
+        full_address="hello@example.com",
+        public_token=uuid.uuid4().hex,
+    )
+    db_session.add(address)
+    db_session.add(
+        InboundEmail(
+            to_address=address.full_address,
+            from_address="very-long-sender-name@example-long-domain.test",
+            subject="仪表盘布局测试",
+            body_text="正文",
+        )
+    )
+    await db_session.commit()
+
     resp = await client.get("/dashboard")
     assert resp.status_code == 200
     assert "最近收件" in resp.text
+    assert "仪表盘布局测试" in resp.text
+    assert "table-fixed" in resp.text
+    assert "whitespace-nowrap" in resp.text
+    assert "md:hidden" in resp.text
 
 
 async def test_new_cf_account_shows_current_permission_guidance(
