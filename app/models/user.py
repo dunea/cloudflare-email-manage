@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from app.models.cf_account import CFAccount
     from app.models.domain_assignment import DomainAssignment
     from app.models.email_address import EmailAddress
+    from app.models.outbound_email import OutboundEmail
 
 
 class User(Base):
@@ -42,6 +43,9 @@ class User(Base):
         back_populates="user", cascade="all, delete-orphan"
     )
     email_addresses: Mapped[list[EmailAddress]] = relationship(back_populates="user")
+    outbound_emails: Mapped[list[OutboundEmail]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
     domain_assignments: Mapped[list[DomainAssignment]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )

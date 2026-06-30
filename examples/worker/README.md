@@ -81,12 +81,12 @@ npx esbuild src/index.js --bundle --format=esm --platform=browser \
   → Cloudflare Email Routing（catch-all → Worker）
   → 触发本 Worker 的 email() handler
   → 从 message.to 提取域名，查 WEBHOOK_SECRETS 找密钥
-  → postal-mime 解析 MIME（提取 subject / text / html）
-  → 构造 JSON {to, from, subject, text, html}
+  → postal-mime 解析 MIME（提取 from / subject / text / html）
+  → 构造 JSON {to, from, envelope_from, from_name, reply_to, message_id, subject, text, html}
   → HMAC-SHA256(域名密钥) 签名
   → POST 平台 /api/v1/inbound/webhook
   → 平台按收件域名查 Domain.webhook_secret 验签 → 入库
-  → 用户通过公开链接 /mail/{token} 查看邮件
+  → 用户通过公开链接 /mail/{token} 查看邮件和发件箱
 ```
 
 ## 排查
@@ -132,7 +132,7 @@ npx wrangler tail
 ```bash
 # 计算签名（密钥需与平台 domain 表中 example.com 的 webhook_secret 一致）
 SECRET="<domain-webhook-secret>"
-BODY='{"to":"hello@example.com","from":"test@gmail.com","subject":"测试","text":"正文","html":"<p>正文</p>"}'
+BODY='{"to":"hello@example.com","from":"test@gmail.com","envelope_from":"bounce@gmail.com","subject":"测试","text":"正文","html":"<p>正文</p>"}'
 SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/.* //')
 
 curl -X POST http://localhost:8000/api/v1/inbound/webhook \
@@ -144,7 +144,7 @@ curl -X POST http://localhost:8000/api/v1/inbound/webhook \
 > Windows PowerShell 可用：
 > ```powershell
 > $secret = "<domain-webhook-secret>"
-> $body = '{"to":"hello@example.com","from":"test@gmail.com","subject":"测试","text":"正文"}'
+> $body = '{"to":"hello@example.com","from":"test@gmail.com","envelope_from":"bounce@gmail.com","subject":"测试","text":"正文"}'
 > $hmac = New-Object System.Security.Cryptography.HMACSHA256
 > $hmac.Key = [Text.Encoding]::UTF8.GetBytes($secret)
 > $sig = ([BitConverter]::ToString($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($body))) -replace '-','').ToLower()

@@ -1,6 +1,7 @@
 """发件 相关 Pydantic 请求/响应模型。"""
 
-from typing import Any, Self
+from datetime import datetime
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
@@ -30,5 +31,25 @@ class SendEmailResult(BaseModel):
     from_address: str
     to: list[str]
     subject: str
-    # CF Email Sending 为 Beta，响应体结构未固定，原样保留以便排查（故此处使用 Any）
-    provider_response: dict[str, Any] | None = None
+    status: Literal["sent", "failed"]
+    outbound_email_id: int | None = None
+    provider_response: dict[str, object] | None = None
+
+
+class OutboundEmailRead(BaseModel):
+    """发件箱邮件响应体。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: int
+    from_address: str
+    to_addresses: list[str]
+    subject: str
+    body_text: str | None = None
+    body_html: str | None = None
+    status: Literal["sending", "sent", "failed"]
+    provider_response: dict[str, object] | None = None
+    error_message: str | None = None
+    sent_at: datetime | None = None
+    created_at: datetime

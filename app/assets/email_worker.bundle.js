@@ -3874,6 +3874,29 @@ function parseSecrets(raw) {
   }
   return {};
 }
+function metadataText(value, maxLength) {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, maxLength);
+}
+function normalizeAddress(value) {
+  let address = "";
+  if (value && typeof value === "object" && typeof value.address === "string") {
+    address = value.address;
+  } else if (typeof value === "string") {
+    address = value;
+  }
+  return metadataText(address, 320);
+}
+function addressName(value) {
+  if (value && typeof value === "object" && typeof value.name === "string") {
+    return metadataText(value.name, 255);
+  }
+  return "";
+}
+function firstAddress(value) {
+  if (!Array.isArray(value) || value.length === 0) return "";
+  return normalizeAddress(value[0]);
+}
 var index_default = {
   /**
    * Email Routing 触发的邮件处理器。
@@ -3910,9 +3933,14 @@ var index_default = {
       message.setReject("\u90AE\u4EF6\u89E3\u6790\u5931\u8D25");
       return;
     }
+    const headerFrom = normalizeAddress(parsed.from) || message.from;
     const payload = {
       to: message.to,
-      from: message.from,
+      from: headerFrom,
+      from_name: addressName(parsed.from),
+      envelope_from: metadataText(message.from, 320),
+      reply_to: firstAddress(parsed.replyTo),
+      message_id: metadataText(parsed.messageId || message.headers.get("message-id") || "", 255),
       zone_id: entry.zone_id,
       subject: parsed.subject || "",
       text: parsed.text || "",

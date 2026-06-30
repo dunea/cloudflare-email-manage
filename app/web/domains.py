@@ -56,8 +56,8 @@ async def domain_detail(
     except NotFoundError:
         return render_error(request, 404, "域名不存在", user=user)
 
-    addresses, _ = await email_service.list_email_addresses(
-        session, user, 1, 100, domain_id
+    addresses, address_total = await email_service.list_email_addresses(
+        session, user, 1, 20, domain_id
     )
 
     # 判断当前用户是否为域名所有者（可共享给他人）
@@ -93,6 +93,7 @@ async def domain_detail(
         active="domains",
         domain=DomainRead.model_validate(domain),
         addresses=[EmailAddressRead.model_validate(a) for a in addresses],
+        address_total=address_total,
         can_assign=can_assign,
         assignments=assignments,
     )

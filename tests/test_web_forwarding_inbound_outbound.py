@@ -18,6 +18,7 @@ from app.models import (
     EmailAddress,
     ForwardingRule,
     InboundEmail,
+    OutboundEmail,
     User,
 )
 from app.services.cloudflare import CloudflareClient
@@ -218,13 +219,51 @@ async def test_forwarding_form_filters_destinations_by_selected_account(
 
     listing = await client.get("/forwarding-rules")
 
-    assert 'x-ref="destinationSelect"' in listing.text
-    assert "renderDests()" in listing.text
-    assert "{% for d in dest_options %}" not in listing.text
-    assert "destsByAccount" in listing.text
-    assert '<option value="good@example.com">' in listing.text
-    assert '<option value="wrong@example.com">' not in listing.text
+    assert 'name="source_email"' in listing.text
+    assert 'list="source-email-suggestions"' in listing.text
+    assert 'name="destination_email"' in listing.text
+    assert 'list="destination-email-suggestions"' in listing.text
+    assert "建议仅显示最近 25 个" in listing.text
+    assert "建议仅显示前 50 个" in listing.text
+    assert "min-h-4" in listing.text
+    assert "good@example.com" in listing.text
     assert "wrong@example.com" in listing.text
+
+
+async def test_forwarding_form_shows_all_sources_bound_hint(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """所有启用源邮箱都已绑定规则时，不显示不可用创建表单。"""
+    await _web_login(client)
+    user = await _get_user(db_session)
+    addr = await _seed_email(db_session, user.id)
+    domain = (
+        await db_session.execute(select(Domain).where(Domain.id == addr.domain_id))
+    ).scalar_one()
+    db_session.add(
+        DestinationAddress(
+            cf_account_id=domain.cf_account_id,
+            user_id=user.id,
+            email="dest@example.com",
+            cf_address_id="cf-dest",
+            verified=True,
+            verified_at=datetime.now(UTC),
+        )
+    )
+    db_session.add(
+        ForwardingRule(
+            email_address_id=addr.id,
+            destination_email="dest@example.com",
+            cf_rule_id="rule-1",
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+
+    listing = await client.get("/forwarding-rules")
+
+    assert "所有源邮箱均已绑定转发规则" in listing.text
+    assert 'name="source_email"' not in listing.text
 
 
 async def test_toggle_and_delete_forwarding_rule(
@@ -279,6 +318,7 @@ async def test_inbound_list_and_detail(
     listing = await client.get("/inbound")
     assert listing.status_code == 200
     assert "问候" in listing.text
+    assert "查看" in listing.text
 
     detail = await client.get(f"/inbound/{msg.id}")
     assert detail.status_code == 200
@@ -298,9 +338,9 @@ async def test_inbound_detail_not_found(client: AsyncClient) -> None:
 
 async def test_outbound_no_senders(client: AsyncClient) -> None:
     await _web_login(client)
-    resp = await client.get("/outbound")
+    resp = await client.get("/outbound/compose")
     assert resp.status_code == 200
-    assert "没有可用的发件地址" in resp.text
+    assert "没有可用的发件地址建议" in resp.text
 
 
 async def test_outbound_send_success(
@@ -326,6 +366,15 @@ async def test_outbound_send_success(
     assert resp.headers["location"] == "/outbound"
     page = await client.get("/outbound")
     assert "邮件已发送" in page.text
+    assert "发件箱" in page.text
+    assert "测试主题" in page.text
+    assert "查看" in page.text
+
+    record = (await db_session.execute(select(OutboundEmail))).scalar_one()
+    detail = await client.get(f"/outbound/{record.id}")
+    assert detail.status_code == 200
+    assert "dest@example.com" in detail.text
+    assert "你好" in detail.text
 
 
 async def test_outbound_send_requires_body(
