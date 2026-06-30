@@ -23,6 +23,12 @@
                 x-text="show ? '隐藏' : '显示'"></button>
       </div>
     </div>
+    {% set remember_checked = form.remember_me | default(true) %}
+    <label class="flex items-center gap-2 text-sm text-slate-600">
+      <input type="checkbox" name="remember_me" value="1" {% if remember_checked %}checked{% endif %}
+             class="h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand/30" />
+      <span>记住登录状态 30 天</span>
+    </label>
     <button type="submit"
             class="w-full rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-dark">登录</button>
   </form>

@@ -16,7 +16,7 @@ from app.config import settings
 from app.database import async_session_maker
 from app.exceptions import register_exception_handlers
 from app.routers import api_router
-from app.services.auth_service import ensure_admin_user
+from app.services.auth_service import WebTokenSession, ensure_admin_user
 from app.services.migration_service import (
     auto_migrate_sqlite,
     ensure_sqlite_schema_current,
@@ -84,9 +84,15 @@ def create_app() -> FastAPI:
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         response = await call_next(request)
-        new_tokens = getattr(request.state, "web_new_tokens", None)
-        if new_tokens is not None:
-            set_auth_cookies(response, new_tokens[0], new_tokens[1])
+        token_session = getattr(request.state, "web_new_token_session", None)
+        if isinstance(token_session, WebTokenSession):
+            set_auth_cookies(
+                response,
+                token_session.access_token,
+                token_session.refresh_token,
+                access_max_age=token_session.access_max_age,
+                refresh_max_age=token_session.refresh_max_age,
+            )
         return response
 
     # 挂载静态资源与前端页面路由

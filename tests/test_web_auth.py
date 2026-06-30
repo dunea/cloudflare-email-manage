@@ -4,9 +4,26 @@
 """
 
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, Response
 
 from app.config import settings
+
+
+def _set_cookie_header(resp: Response, cookie_name: str) -> str:
+    """从响应中取指定 Set-Cookie 头。"""
+    for header in resp.headers.get_list("set-cookie"):
+        if header.startswith(f"{cookie_name}="):
+            return header
+    raise AssertionError(f"missing Set-Cookie header: {cookie_name}")
+
+
+def _cookie_max_age(set_cookie_header: str) -> int:
+    """解析 Set-Cookie 中的 Max-Age。"""
+    for part in set_cookie_header.split(";"):
+        item = part.strip()
+        if item.lower().startswith("max-age="):
+            return int(item.split("=", 1)[1])
+    raise AssertionError("missing Max-Age")
 
 
 async def test_login_page_renders(client: AsyncClient) -> None:
@@ -14,6 +31,9 @@ async def test_login_page_renders(client: AsyncClient) -> None:
     resp = await client.get("/login")
     assert resp.status_code == 200
     assert "登录" in resp.text
+    assert "记住登录状态 30 天" in resp.text
+    assert 'name="remember_me"' in resp.text
+    assert 'value="1" checked' in resp.text
 
 
 async def test_register_page_renders(client: AsyncClient) -> None:
@@ -33,8 +53,8 @@ async def test_root_renders_landing_when_anonymous(client: AsyncClient) -> None:
     assert 'property="og:title"' in resp.text
 
 
-async def test_root_redirects_to_dashboard_when_authed(client: AsyncClient) -> None:
-    """已登录访问首页重定向到仪表盘。"""
+async def test_root_shows_dashboard_cta_when_authed(client: AsyncClient) -> None:
+    """已登录访问首页渲染落地页，并只显示控制台入口。"""
     await client.post(
         "/register",
         data={
@@ -45,8 +65,11 @@ async def test_root_redirects_to_dashboard_when_authed(client: AsyncClient) -> N
     )
     await client.post("/login", data={"username": "carol", "password": "password123"})
     resp = await client.get("/", follow_redirects=False)
-    assert resp.status_code == 303
-    assert resp.headers["location"] == "/dashboard"
+    assert resp.status_code == 200
+    assert "控制台" in resp.text
+    assert "免费注册" not in resp.text
+    assert 'href="/login"' not in resp.text
+    assert 'href="/register"' not in resp.text
 
 
 async def test_dashboard_requires_auth(client: AsyncClient) -> None:
@@ -84,6 +107,84 @@ async def test_register_then_login_flow(client: AsyncClient) -> None:
     assert "alice" in resp.text
 
 
+async def test_login_remember_me_sets_30_day_refresh_cookie(
+    client: AsyncClient,
+) -> None:
+    """勾选记住登录状态时，刷新 Cookie 保留 30 天。"""
+    await client.post(
+        "/register",
+        data={
+            "username": "remembered",
+            "email": "remembered@example.com",
+            "password": "password123",
+        },
+    )
+    resp = await client.post(
+        "/login",
+        data={
+            "username": "remembered",
+            "password": "password123",
+            "remember_me": "1",
+        },
+        follow_redirects=False,
+    )
+    refresh_cookie = _set_cookie_header(resp, "refresh_token")
+    assert "Max-Age=2592000" in refresh_cookie
+
+
+async def test_login_without_remember_me_sets_6_hour_refresh_cookie(
+    client: AsyncClient,
+) -> None:
+    """未勾选记住登录状态时，刷新 Cookie 仅保留 6 小时。"""
+    await client.post(
+        "/register",
+        data={
+            "username": "shortsession",
+            "email": "shortsession@example.com",
+            "password": "password123",
+        },
+    )
+    resp = await client.post(
+        "/login",
+        data={"username": "shortsession", "password": "password123"},
+        follow_redirects=False,
+    )
+    refresh_cookie = _set_cookie_header(resp, "refresh_token")
+    assert "Max-Age=21600" in refresh_cookie
+
+
+async def test_web_refresh_keeps_original_short_session_deadline(
+    client: AsyncClient,
+) -> None:
+    """短会话自动续签时不把刷新 Cookie 延长到 30 天。"""
+    await client.post(
+        "/register",
+        data={
+            "username": "shortrefresh",
+            "email": "shortrefresh@example.com",
+            "password": "password123",
+        },
+    )
+    login = await client.post(
+        "/login",
+        data={"username": "shortrefresh", "password": "password123"},
+        follow_redirects=False,
+    )
+    refresh_token = login.cookies["refresh_token"]
+    client.cookies.clear()
+
+    resp = await client.get(
+        "/dashboard",
+        headers={"cookie": f"refresh_token={refresh_token}"},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 200
+    refresh_cookie = _set_cookie_header(resp, "refresh_token")
+    assert 0 < _cookie_max_age(refresh_cookie) <= 21600
+    assert "Max-Age=2592000" not in refresh_cookie
+
+
 async def test_login_invalid_credentials_rerenders(client: AsyncClient) -> None:
     """凭证错误时回填表单并显示错误提示。"""
     resp = await client.post(
@@ -93,11 +194,10 @@ async def test_login_invalid_credentials_rerenders(client: AsyncClient) -> None:
     )
     assert resp.status_code == 400
     assert "用户名或密码错误" in resp.text
+    assert 'value="1" checked' not in resp.text
 
 
-async def test_login_rate_limit(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_login_rate_limit(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """连续登录失败超过阈值后返回 429。"""
     monkeypatch.setattr(settings, "LOGIN_RATE_LIMIT_ATTEMPTS", 1)
     monkeypatch.setattr(settings, "LOGIN_RATE_LIMIT_WINDOW_SECONDS", 60)
@@ -135,9 +235,7 @@ async def test_logout_clears_session(client: AsyncClient) -> None:
         "/register",
         data={"username": "bob", "email": "bob@example.com", "password": "password123"},
     )
-    await client.post(
-        "/login", data={"username": "bob", "password": "password123"}
-    )
+    await client.post("/login", data={"username": "bob", "password": "password123"})
     resp = await client.get("/dashboard", follow_redirects=False)
     assert resp.status_code == 200
 

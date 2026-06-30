@@ -44,8 +44,12 @@
       并用 API Key 程序化收发邮件。开源，支持完全自部署。
     </p>
     <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
+      {% if current_user %}
+      <a href="/dashboard" class="rounded-lg bg-brand px-6 py-3 text-sm font-semibold text-white hover:bg-brand-dark">控制台</a>
+      {% else %}
       <a href="/register" class="rounded-lg bg-brand px-6 py-3 text-sm font-semibold text-white hover:bg-brand-dark">免费注册</a>
       <a href="/login" class="rounded-lg border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">登录</a>
+      {% endif %}
       <a href="https://github.com/dunea/cloudflare-email-manage" target="_blank" rel="noopener noreferrer"
          class="rounded-lg px-6 py-3 text-sm font-semibold text-slate-600 hover:text-brand">在 GitHub 查看 →</a>
     </div>
