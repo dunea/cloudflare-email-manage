@@ -4,6 +4,7 @@
 此处直接使用 bcrypt 库完成密码哈希与校验。
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
@@ -23,6 +24,18 @@ ACCESS_TOKEN_TYPE = "access"
 REFRESH_TOKEN_TYPE = "refresh"
 # bcrypt 单次最多处理 72 字节，超出部分需手动截断
 _BCRYPT_MAX_BYTES = 72
+# Web 短会话有效期：未勾选“记住登录状态”时使用
+WEB_SHORT_SESSION_DELTA = timedelta(hours=6)
+
+
+@dataclass(frozen=True)
+class WebTokenSession:
+    """Web Cookie 会话令牌及对应 Cookie 过期时间。"""
+
+    access_token: str
+    refresh_token: str
+    access_max_age: int
+    refresh_max_age: int
 
 
 def hash_password(password: str) -> str:
@@ -41,14 +54,27 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
-def _create_token(user_id: int, token_type: str, expires_delta: timedelta) -> str:
+def _create_token(
+    user_id: int,
+    token_type: str,
+    expires_delta: timedelta | None = None,
+    *,
+    expires_at: datetime | None = None,
+    issued_at: datetime | None = None,
+) -> str:
     """生成指定类型的 JWT 令牌。"""
-    now = datetime.now(UTC)
+    now = issued_at or datetime.now(UTC)
+    if expires_at is None:
+        if expires_delta is None:
+            raise ValueError("expires_delta 或 expires_at 必须提供一个")
+        exp = now + expires_delta
+    else:
+        exp = expires_at
     payload: dict[str, object] = {
         "sub": str(user_id),
         "type": token_type,
         "iat": now,
-        "exp": now + expires_delta,
+        "exp": exp,
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
 
@@ -88,12 +114,80 @@ def issue_tokens(user: User) -> Token:
     )
 
 
+def _seconds_until(expires_at: datetime, now: datetime) -> int:
+    """计算从 now 到 expires_at 的正整数秒数。"""
+    return max(0, int((expires_at - now).total_seconds()))
+
+
+def _exp_claim_to_datetime(value: object) -> datetime:
+    """将 JWT exp claim 转为 UTC datetime。"""
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, UTC)
+    raise AuthError("令牌过期时间无效")
+
+
+def _issue_web_token_session(
+    user_id: int, session_expires_at: datetime, *, issued_at: datetime | None = None
+) -> WebTokenSession:
+    """按给定会话截止时间签发 Web 令牌，访问令牌不超过会话剩余时间。"""
+    now = issued_at or datetime.now(UTC)
+    if session_expires_at <= now:
+        raise AuthError("刷新令牌已过期")
+
+    access_expires_at = min(
+        now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+        session_expires_at,
+    )
+    access_token = _create_token(
+        user_id,
+        ACCESS_TOKEN_TYPE,
+        expires_at=access_expires_at,
+        issued_at=now,
+    )
+    refresh_token = _create_token(
+        user_id,
+        REFRESH_TOKEN_TYPE,
+        expires_at=session_expires_at,
+        issued_at=now,
+    )
+    return WebTokenSession(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        access_max_age=_seconds_until(access_expires_at, now),
+        refresh_max_age=_seconds_until(session_expires_at, now),
+    )
+
+
+def issue_web_tokens(user: User, remember_me: bool) -> WebTokenSession:
+    """为 Web 登录签发 Cookie 会话令牌。"""
+    session_delta = (
+        timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        if remember_me
+        else WEB_SHORT_SESSION_DELTA
+    )
+    now = datetime.now(UTC)
+    return _issue_web_token_session(user.id, now + session_delta, issued_at=now)
+
+
+async def _user_from_refresh_payload(session: AsyncSession, payload: dict[str, object]) -> User:
+    """根据刷新令牌 payload 读取有效用户。"""
+    sub = payload.get("sub")
+    if not isinstance(sub, str) or not sub.isdigit():
+        raise AuthError("令牌主体无效")
+
+    result = await session.execute(
+        select(User).where(User.id == int(sub), User.is_deleted.is_(False))
+    )
+    user = result.scalar_one_or_none()
+    if user is None or not user.is_active:
+        raise AuthError("用户不存在或已被禁用")
+    return user
+
+
 async def register_user(session: AsyncSession, data: UserCreate) -> User:
     """注册新用户：校验唯一性后写入数据库。"""
     result = await session.execute(
-        select(User).where(
-            (User.username == data.username) | (User.email == data.email)
-        )
+        select(User).where((User.username == data.username) | (User.email == data.email))
     )
     if result.scalars().first() is not None:
         raise AppException("用户名或邮箱已被注册", code=1409, http_status=409)
@@ -110,9 +204,7 @@ async def register_user(session: AsyncSession, data: UserCreate) -> User:
     return user
 
 
-async def authenticate_user(
-    session: AsyncSession, username: str, password: str
-) -> User:
+async def authenticate_user(session: AsyncSession, username: str, password: str) -> User:
     """校验登录凭证，返回用户；失败抛出 AuthError。"""
     result = await session.execute(
         select(User).where(
@@ -134,17 +226,19 @@ async def refresh_tokens(session: AsyncSession, refresh_token: str) -> Token:
     if payload.get("type") != REFRESH_TOKEN_TYPE:
         raise AuthError("无效的刷新令牌")
 
-    sub = payload.get("sub")
-    if not isinstance(sub, str) or not sub.isdigit():
-        raise AuthError("令牌主体无效")
-
-    result = await session.execute(
-        select(User).where(User.id == int(sub), User.is_deleted.is_(False))
-    )
-    user = result.scalar_one_or_none()
-    if user is None or not user.is_active:
-        raise AuthError("用户不存在或已被禁用")
+    user = await _user_from_refresh_payload(session, payload)
     return issue_tokens(user)
+
+
+async def refresh_web_tokens(session: AsyncSession, refresh_token: str) -> WebTokenSession:
+    """使用 Web 刷新令牌续签 Cookie，会话截止时间不后延。"""
+    payload = decode_token(refresh_token)
+    if payload.get("type") != REFRESH_TOKEN_TYPE:
+        raise AuthError("无效的刷新令牌")
+
+    user = await _user_from_refresh_payload(session, payload)
+    session_expires_at = _exp_claim_to_datetime(payload.get("exp"))
+    return _issue_web_token_session(user.id, session_expires_at)
 
 
 async def ensure_admin_user(session: AsyncSession) -> User | None:

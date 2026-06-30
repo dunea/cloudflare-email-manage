@@ -58,7 +58,7 @@
     {"type": "link", "key": "api_keys", "label": "API Key", "href": "/api-keys", "icon": "🔑"},
   ] %}
 
-  {% if current_user %}
+  {% if current_user and layout != 'landing' %}
   <!-- 顶部导航（登录态） -->
   <header x-data="{ mobileNav: false }" @click.outside="mobileNav = false"
           class="sticky top-0 z-30 border-b border-slate-200 bg-white">
@@ -166,18 +166,23 @@
         <span class="text-lg font-semibold text-slate-900">{{ app_name }}</span>
       </a>
       <nav class="flex items-center gap-2">
+        {% if current_user %}
+        <a href="/dashboard"
+           class="rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-dark">控制台</a>
+        {% else %}
         <a href="/login"
            class="rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900">登录</a>
         <a href="/register"
            class="rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-dark">注册</a>
+        {% endif %}
       </nav>
     </div>
   </header>
   {% endif %}
 
   <!-- 主区域：app（宽栏）/ landing（全宽）/ auth（居中表单）三态 -->
-  <main class="flex-1 {% if current_user %}px-4 py-6 lg:px-8{% elif layout == 'landing' %}{% else %}flex flex-col items-center justify-center px-4 py-10{% endif %}">
-    <div class="{% if current_user %}mx-auto w-full max-w-6xl{% elif layout == 'landing' %}w-full{% else %}w-full max-w-md{% endif %}">
+  <main class="flex-1 {% if current_user and layout != 'landing' %}px-4 py-6 lg:px-8{% elif layout == 'landing' %}{% else %}flex flex-col items-center justify-center px-4 py-10{% endif %}">
+    <div class="{% if current_user and layout != 'landing' %}mx-auto w-full max-w-6xl{% elif layout == 'landing' %}w-full{% else %}w-full max-w-md{% endif %}">
       {% block content %}{% endblock %}
     </div>
   </main>

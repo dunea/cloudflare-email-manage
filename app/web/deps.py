@@ -24,13 +24,22 @@ class WebRedirect(Exception):
 
 
 def set_auth_cookies(
-    response: Response, access_token: str, refresh_token: str
+    response: Response,
+    access_token: str,
+    refresh_token: str,
+    *,
+    access_max_age: int | None = None,
+    refresh_max_age: int | None = None,
 ) -> None:
     """在响应上写入认证 Cookie（HttpOnly，SameSite=Lax）。"""
     response.set_cookie(
         ACCESS_COOKIE,
         access_token,
-        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        max_age=(
+            access_max_age
+            if access_max_age is not None
+            else settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        ),
         httponly=True,
         samesite="lax",
         secure=settings.COOKIE_SECURE,
@@ -39,7 +48,11 @@ def set_auth_cookies(
     response.set_cookie(
         REFRESH_COOKIE,
         refresh_token,
-        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+        max_age=(
+            refresh_max_age
+            if refresh_max_age is not None
+            else settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
+        ),
         httponly=True,
         samesite="lax",
         secure=settings.COOKIE_SECURE,
@@ -61,7 +74,7 @@ async def get_optional_web_user(
 ) -> User | None:
     """从 Cookie 解析当前用户；access 失效时用 refresh 续签。
 
-    续签得到的新令牌暂存于 ``request.state.web_new_tokens``，由 HTTP 中间件在
+    续签得到的新令牌暂存于 ``request.state.web_new_token_session``，由 HTTP 中间件在
     响应阶段写回 Cookie（依赖内直接写 Cookie 在路由返回自定义 Response 时不会
     生效，故统一交给中间件处理）。未登录返回 None。
     """
@@ -73,11 +86,11 @@ async def get_optional_web_user(
 
     if refresh_token:
         try:
-            tokens = await auth_service.refresh_tokens(session, refresh_token)
-            user = await _user_from_access_token(session, tokens.access_token)
+            token_session = await auth_service.refresh_web_tokens(session, refresh_token)
+            user = await _user_from_access_token(session, token_session.access_token)
         except AppException:
             return None
-        request.state.web_new_tokens = (tokens.access_token, tokens.refresh_token)
+        request.state.web_new_token_session = token_session
         return user
 
     return None

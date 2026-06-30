@@ -46,10 +46,12 @@ async def login_submit(
     session: SessionDep,
     username: Annotated[str, Form()],
     password: Annotated[str, Form()],
+    remember_me: Annotated[str | None, Form()] = None,
     next_url: Annotated[str, Form(alias="next")] = "/dashboard",
 ) -> Response:
     """处理登录表单：校验凭证后下发 Cookie 并跳转。"""
     bucket_key = f"{client_ip(request)}:{username.lower()}"
+    remember_login = remember_me == "1"
     try:
         user = await auth_service.authenticate_user(session, username, password)
     except AppException as exc:
@@ -66,20 +68,34 @@ async def login_submit(
                 request,
                 "auth/login.html",
                 status_code=rate_exc.http_status,
-                form={"username": username, "next": _safe_next(next_url)},
+                form={
+                    "username": username,
+                    "next": _safe_next(next_url),
+                    "remember_me": remember_login,
+                },
             )
         flash(request, exc.message, "error")
         return render(
             request,
             "auth/login.html",
             status_code=400,
-            form={"username": username, "next": _safe_next(next_url)},
+            form={
+                "username": username,
+                "next": _safe_next(next_url),
+                "remember_me": remember_login,
+            },
         )
 
     reset("login", bucket_key)
-    tokens = auth_service.issue_tokens(user)
+    token_session = auth_service.issue_web_tokens(user, remember_login)
     response = RedirectResponse(_safe_next(next_url), status_code=303)
-    set_auth_cookies(response, tokens.access_token, tokens.refresh_token)
+    set_auth_cookies(
+        response,
+        token_session.access_token,
+        token_session.refresh_token,
+        access_max_age=token_session.access_max_age,
+        refresh_max_age=token_session.refresh_max_age,
+    )
     return response
 
 
